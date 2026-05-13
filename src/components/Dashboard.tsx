@@ -127,7 +127,8 @@ export default function Dashboard({ user, onSelectRM, onViewHistory, setToast, r
                   onClick={() => questions.length > 0 && onSelectRM(rm, isDone)}
                   disabled={questions.length === 0}
                   className={cn(
-                    "w-full flex items-center justify-between p-4 transition-colors group",
+                    "w-full flex items-center justify-between p-4 transition-colors group border-l-4",
+                    status === 'On - Leave' ? "bg-amber-50/30 border-amber-400" : isDone ? "bg-slate-50/50 border-green-400" : "bg-white border-transparent",
                     questions.length > 0 ? "hover:bg-slate-50 cursor-pointer" : "opacity-75 cursor-not-allowed"
                   )}
                 >
@@ -141,9 +142,9 @@ export default function Dashboard({ user, onSelectRM, onViewHistory, setToast, r
                     {questions.length === 0 ? (
                       <span className="text-[10px] bg-slate-50 text-slate-300 px-2.5 py-1 rounded-full font-bold uppercase tracking-tight italic">No Qs Today</span>
                     ) : status === 'On - Leave' ? (
-                      <span className="text-[10px] bg-amber-100 text-amber-600 px-2.5 py-1 rounded-full font-bold uppercase tracking-tight">On Leave</span>
+                      <span className="text-[10px] bg-amber-100 text-amber-600 px-2.5 py-1 rounded-full font-bold uppercase tracking-tight ring-1 ring-amber-200">On Leave</span>
                     ) : isDone ? (
-                      <span className="text-[10px] bg-green-100 text-green-600 px-2.5 py-1 rounded-full font-bold uppercase tracking-tight">Completed</span>
+                      <span className="text-[10px] bg-green-100 text-green-600 px-2.5 py-1 rounded-full font-bold uppercase tracking-tight ring-1 ring-green-200">Completed</span>
                     ) : (
                       <span className="text-[10px] bg-slate-100 text-slate-400 px-2.5 py-1 rounded-full font-bold uppercase tracking-tight">Pending</span>
                     )}
