@@ -889,118 +889,70 @@ router.post("/admin/generate-insights-v2", async (req, res) => {
   const { date, data } = req.body;
   if (!date || !data) return res.status(400).json({ error: "Date and data required" });
 
-  const hfToken = (process.env.HF_TOKEN || "").trim();
-  const hfModelId = (process.env.HF_MODEL_ID || "HuggingFaceH4/zephyr-7b-beta").trim();
-
-  if (!hfToken) {
-    console.error("HF Insight Error: HF_TOKEN is missing");
-    return res.status(500).json({ error: "HF_TOKEN not configured" });
-  }
+  const groqKey = (process.env.GROQ_API_KEY || "").trim();
+  if (!groqKey) return res.status(500).json({ error: "GROQ_API_KEY not configured" });
 
   try {
-    const prompt = `[INST] Analyze the "Daily Choreography" qualitative responses for ${date} and provide a strategic MD-level report.
+    const prompt = `Analyze these Daily Choreography field responses for ${date}.
+Completion rate: ${data.stats?.participationRate?.toFixed(1)}%
+Sample responses: ${JSON.stringify(data.sampleResponses.slice(0, 40).map((r: any) => ({ q: r.question, a: r.answer })))}
 
-CONTEXT DATA:
-- Total Responses: ${data.sampleResponses?.length || 0}
-- Operational Progress: ${data.stats?.participationRate?.toFixed(1) || 0}% completion
-- Sample Data: ${JSON.stringify((data.sampleResponses || []).slice(0, 50).map((r: any) => ({ q: r.question, a: r.answer })))}
-
-REQUIREMENTS:
-1. Themes: Categorize feedback into 4-5 major "Themes".
-2. Percentages: Assign a numerical percentage to each theme.
-3. Red Flags: Identify critical blockers.
-4. Recommendations: 3-5 high-impact interventions.
-5. Sentiment Score: 0-100 score.
-
-Your response must be strictly valid JSON according to this structure:
+Respond ONLY with this exact JSON, no text outside it:
 {
-  "executive_summary": "...",
-  "themes": [{"name": "...", "percentage": 25, "insight": "..."}],
-  "red_flags": ["...", "..."],
-  "action_items": ["...", "..."],
-  "field_sentiment_score": 85
-}
-Do not include any text outside the JSON block. [/INST]`;
+  "executive_summary": "2-3 sentence summary",
+  "themes": [{"name": "Theme", "percentage": 30, "insight": "explanation"}],
+  "red_flags": ["flag 1", "flag 2"],
+  "action_items": ["action 1", "action 2", "action 3"],
+  "field_sentiment_score": 75
+}`;
 
-    const HF_API_URL = `https://api-inference.huggingface.co/models/${hfModelId}`;
-    
-    console.log(`[HF Inference] Calling HF via native HTTPS: ${HF_API_URL}`);
-    
     const result = await new Promise<any>((resolve, reject) => {
       const body = JSON.stringify({
-        inputs: prompt,
-        parameters: {
-          max_new_tokens: 1500,
-          return_full_text: false,
-          temperature: 0.1,
-          wait_for_model: true
-        }
+        model: "llama3-8b-8192",
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.1,
+        max_tokens: 1000,
+        response_format: { type: "json_object" }
       });
 
       const options = {
-        hostname: "api-inference.huggingface.co",
-        path: `/models/${hfModelId}`,
+        hostname: "api.groq.com",
+        path: "/openai/v1/chat/completions",
         method: "POST",
         headers: {
-          "Authorization": `Bearer ${hfToken}`,
+          "Authorization": `Bearer ${groqKey}`,
           "Content-Type": "application/json",
           "Content-Length": Buffer.byteLength(body)
-        },
-        timeout: 60000
+        }
       };
 
-      const req = https.request(options, (res) => {
-        let data = "";
-        res.on("data", chunk => data += chunk);
-        res.on("end", () => {
-          if (res.statusCode && res.statusCode >= 400) {
-            reject(new Error(`HF Inference error (${res.statusCode}): ${data.slice(0, 500)}`));
+      const reqHttp = https.request(options, (innerRes) => {
+        let raw = "";
+        innerRes.on("data", chunk => raw += chunk);
+        innerRes.on("end", () => {
+          if (innerRes.statusCode && innerRes.statusCode >= 400) {
+            reject(new Error(`Groq error (${innerRes.statusCode}): ${raw.slice(0, 300)}`));
             return;
           }
-          try { 
-            resolve(JSON.parse(data)); 
-          } catch (e) { 
-            reject(new Error(`Parse failed: ${data.slice(0, 200)}`)); 
-          }
+          try { resolve(JSON.parse(raw)); }
+          catch(e) { reject(new Error(`Parse failed: ${raw.slice(0, 200)}`)); }
         });
       });
-
-      req.on("error", (e) => reject(new Error(`HTTPS Request Error: ${e.message}`)));
-      req.on("timeout", () => {
-        req.destroy();
-        reject(new Error("HF Request timeout after 60s"));
-      });
-      req.write(body);
-      req.end();
+      reqHttp.on("error", reject);
+      reqHttp.write(body);
+      reqHttp.end();
     });
 
-    let reportContent = "";
-    
-    if (Array.isArray(result)) {
-      reportContent = result[0].generated_text || result[0].generated_text?.content || "";
-    } else {
-      reportContent = result.generated_text || result.generated_text?.content || "";
-    }
+    const text = result.choices?.[0]?.message?.content;
+    if (!text) throw new Error("Groq returned empty response");
 
-    if (!reportContent) {
-      console.error("[HF Inference] AI returned empty content. Full result:", JSON.stringify(result));
-      throw new Error("AI returned empty content");
-    }
-    
-    const jsonMatch = reportContent.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-      const parsed = JSON.parse(jsonMatch[0]);
-      res.json(parsed);
-    } else {
-      res.json(JSON.parse(reportContent));
-    }
+    const match = text.match(/\{[\s\S]*\}/);
+    if (!match) throw new Error(`No JSON in response: ${text.slice(0, 100)}`);
+
+    res.json(JSON.parse(match[0]));
   } catch (err: any) {
-    console.error("HF Insight generation error:", err.response?.data || err.message);
-    const details = err.response?.data ? JSON.stringify(err.response.data) : err.message;
-    res.status(500).json({ 
-      error: "Failed to generate insights via Hugging Face", 
-      details: details.slice(0, 500)
-    });
+    console.error("Groq insight error:", err.message);
+    res.status(500).json({ error: "Failed to generate insights", details: err.message.slice(0, 300) });
   }
 });
 
