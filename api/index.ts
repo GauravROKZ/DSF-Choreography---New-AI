@@ -893,18 +893,29 @@ router.post("/admin/generate-insights-v2", async (req, res) => {
   if (!groqKey) return res.status(500).json({ error: "GROQ_API_KEY not configured" });
 
   try {
-    const prompt = `Analyze these Daily Choreography field responses for ${date}.
-Completion rate: ${data.stats?.participationRate?.toFixed(1)}%
-Sample responses: ${JSON.stringify(data.sampleResponses.slice(0, 40).map((r: any) => ({ q: r.question, a: r.answer })))}
+   const prompt = `[INST] Analyze the "Daily Choreography" qualitative responses for ${date} and provide a strategic MD-level report.
 
-Respond ONLY with this exact JSON, no text outside it:
+CONTEXT DATA:
+- Total Responses: ${data.sampleResponses?.length || 0}
+- Operational Progress: ${data.stats?.participationRate?.toFixed(1) || 0}% completion
+- Sample Data: ${JSON.stringify((data.sampleResponses || []).slice(0, 50).map((r: any) => ({ q: r.question, a: r.answer })))}
+
+REQUIREMENTS:
+1. Themes: Categorize feedback into 4-5 major "Themes".
+2. Percentages: Assign a numerical percentage to each theme.
+3. Red Flags: Identify critical blockers.
+4. Recommendations: 3-5 high-impact interventions.
+5. Sentiment Score: 0-100 score.
+
+Your response must be strictly valid JSON according to this structure:
 {
-  "executive_summary": "2-3 sentence summary",
-  "themes": [{"name": "Theme", "percentage": 30, "insight": "explanation"}],
-  "red_flags": ["flag 1", "flag 2"],
-  "action_items": ["action 1", "action 2", "action 3"],
-  "field_sentiment_score": 75
-}`;
+  "executive_summary": "...",
+  "themes": [{"name": "...", "percentage": 25, "insight": "..."}],
+  "red_flags": ["...", "..."],
+  "action_items": ["...", "..."],
+  "field_sentiment_score": 85
+}
+Do not include any text outside the JSON block. [/INST]`;
 
     const result = await new Promise<any>((resolve, reject) => {
       const body = JSON.stringify({
