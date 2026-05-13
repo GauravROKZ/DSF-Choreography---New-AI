@@ -29,8 +29,8 @@ router.get("/health", (req, res) => {
 });
 
 // Supabase Initialization
-const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "https://jmrxdxoouuwnjsengrda.supabase.co";
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImptcnhkeG9vdXV3bmpzZW5ncmRhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgzOTk3MzQsImV4cCI6MjA5Mzk3NTczNH0.ALBiY3OhChenX4b17ulXMp_rBff5yUmSewWfqoIGQ7w";
+const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 const getFormattedDateDDMMYY = (dateObj: Date) => {
