@@ -217,84 +217,39 @@ export default function AdminDashboard({ setToast, onBack }: AdminDashboardProps
   const handleGenerateAIInsight = async () => {
   if (!insightDate) return setToast('Please select a date for the MD report', 'err');
   setIsGeneratingInsight(true);
-  setToast('Fetching choreography responses...', 'ok');
+  setToast('Fetching choreography responses for deep analysis...', 'ok');
 
   try {
-    // Step 1: Your backend (works fine)
     const dataRes = await fetch(`/api/admin/insights-data?date=${insightDate}`);
     if (!dataRes.ok) throw new Error('Data fetch failed');
     const data = await dataRes.json();
 
-    if (!data.sampleResponses?.length) {
+    if (!data.sampleResponses || data.sampleResponses.length === 0) {
       throw new Error('No responses found for this date to analyze');
     }
 
     setToast('AI is analyzing field responses...', 'ok');
 
-    // Step 2: Call HF directly from BROWSER (bypasses Railway proxy)
-    const prompt = `[INST] Analyze these field responses for ${insightDate} and return ONLY a valid JSON object, no other text.
+    const insightRes = await fetch('/api/admin/generate-insights-v2', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ date: insightDate, data })
+    });
 
-Data: ${JSON.stringify(data.sampleResponses.slice(0, 40).map((r: any) => ({ q: r.question, a: r.answer })))}
-Completion: ${data.stats?.participationRate?.toFixed(1)}%
-
-Return this exact JSON structure:
-{
-  "executive_summary": "2-3 sentence summary",
-  "themes": [{"name": "Theme Name", "percentage": 30, "insight": "explanation"}],
-  "red_flags": ["flag 1", "flag 2"],
-  "action_items": ["action 1", "action 2", "action 3"],
-  "field_sentiment_score": 75
-} [/INST]`;
-
-    const hfToken = import.meta.env.VITE_HF_TOKEN;
-    if (!hfToken) throw new Error('VITE_HF_TOKEN not configured in Railway variables');
-
-    const hfRes = await fetch(
-      'https://api-inference.huggingface.co/models/HuggingFaceH4/zephyr-7b-beta',
-      {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${hfToken}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          inputs: prompt,
-          parameters: {
-            max_new_tokens: 800,
-            return_full_text: false,
-            temperature: 0.1,
-            wait_for_model: true
-          }
-        })
-      }
-    );
-
-    if (!hfRes.ok) {
-      const errData = await hfRes.json().catch(() => ({}));
-      throw new Error(errData.error || `HF Error ${hfRes.status}`);
+    if (!insightRes.ok) {
+      const errorData = await insightRes.json();
+      throw new Error(errorData.details || errorData.error || 'AI Insight generation failed');
     }
 
-    const result = await hfRes.json();
-    const text = Array.isArray(result)
-      ? result[0]?.generated_text
-      : result?.generated_text;
-
-    if (!text) throw new Error('AI returned empty response');
-
-    const match = text.match(/\{[\s\S]*\}/);
-    if (!match) throw new Error(`No JSON found in AI response: ${text.slice(0, 100)}`);
-
-    const reportData = JSON.parse(match[0]);
+    const reportData = await insightRes.json();
     generateDeepInsightPDF(reportData, data, insightDate);
     setToast('MD Strategic Insight Report generated!', 'ok');
-
   } catch (err: any) {
-    console.error('AI Insight error:', err);
     setToast(err.message || 'Failed to generate AI insights', 'err');
   } finally {
     setIsGeneratingInsight(false);
   }
-};  
+};
   
   const generateDeepInsightPDF = (report: any, rawData: any, date: string) => {
     const doc = new jsPDF();
