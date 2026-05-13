@@ -28,8 +28,8 @@ router.get("/health", (req, res) => {
 });
 
 // Supabase Initialization
-const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL;
-const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY;
+const supabaseUrl = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL || "https://jmrxdxoouuwnjsengrda.supabase.co";
+const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImptcnhkeG9vdXV3bmpzZW5ncmRhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzgzOTk3MzQsImV4cCI6MjA5Mzk3NTczNH0.ALBiY3OhChenX4b17ulXMp_rBff5yUmSewWfqoIGQ7w";
 const supabase = createClient(supabaseUrl, supabaseKey);
 
 const getFormattedDateDDMMYY = (dateObj: Date) => {
@@ -833,46 +833,67 @@ router.get("/management-dashboard", async (req, res) => {
 });
 
 router.get("/admin/insights-data", async (req, res) => {
-  const { date } = req.query;
-  if (!date) return res.status(400).json({ error: "Date required" });
+  const { startDate, endDate } = req.query;
+  if (!startDate || !endDate) return res.status(400).json({ error: "Date range required" });
 
   try {
     const settings = await getSettings();
     const redFlagLimit = Number(settings.red_flag_threshold || 50);
     const bottomLimit = Number(settings.bottom_performer_threshold || 30);
 
-    // 1. Fetch all submissions for the date
-    const submissions = await fetchLargeTable('submissions', '*', (q: any) => q.eq('date', date));
+    const start = new Date(startDate as string);
+    const end = new Date(endDate as string);
+    const daysInRangeCount = Math.max(1, Math.round((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24)) + 1);
+
+    // 1. Fetch all submissions for the range
+    const submissions = await fetchLargeTable('submissions', '*', (q: any) => 
+      q.gte('date', startDate).lte('date', endDate)
+    );
     
-    // 2. Fetch all users to calculate participation
+    // 2. Fetch all users
     const users = await fetchLargeTable('users', 'user_id, role, manager_id, name');
     
-    // 3. Fetch all responses for the date to provide qualitative context
-    // We'll limit this to first 1000 responses to avoid payload overflow, but usually it's enough for AI to see trends
-    const responses = await fetchLargeTable('responses', '*', (q: any) => q.eq('date', date));
+    // 3. Fetch responses for the range (sample for AI)
+    const responses = await fetchLargeTable('responses', '*', (q: any) => 
+      q.gte('date', startDate).lte('date', endDate)
+    );
 
-    // 4. Fetch daily topics for context
+    // 4. Fetch daily topics for the range
+    const ddmmYYDates: string[] = [];
+    for (let i = 0; i < daysInRangeCount; i++) {
+      const d = new Date(start);
+      d.setDate(d.getDate() + i);
+      ddmmYYDates.push(getFormattedDateDDMMYY(d));
+    }
+
     const { data: topicsData } = await supabase
       .from('questions')
-      .select('topic, level')
-      .eq('day', getFormattedDateDDMMYY(new Date(date as string)));
+      .select('topic, level, day')
+      .in('day', ddmmYYDates);
     
-    const dailyTopics: Record<string, string> = {};
+    const dailyTopics: Record<string, Set<string>> = {};
     if (topicsData) {
       topicsData.forEach(t => {
         if (t.topic && t.level) {
           const l = t.level.toUpperCase();
-          if (!dailyTopics[l]) dailyTopics[l] = t.topic;
+          if (!dailyTopics[l]) dailyTopics[l] = new Set();
+          dailyTopics[l].add(t.topic);
         }
       });
     }
 
-    // 5. Aggregate stats for the AI
+    const finalTopics: Record<string, string> = {};
+    Object.entries(dailyTopics).forEach(([lvl, set]) => {
+      finalTopics[lvl] = Array.from(set).join(" | ");
+    });
+
+    // 5. Aggregate stats
     const totalUsers = users.length;
     const totalSubmissions = submissions.length;
-    const participationRate = totalUsers > 0 ? (totalSubmissions / totalUsers) * 100 : 0;
+    const maxPossibleSubmissions = totalUsers * daysInRangeCount;
+    const participationRate = maxPossibleSubmissions > 0 ? (totalSubmissions / maxPossibleSubmissions) * 100 : 0;
 
-    // Advanced Hierarchy mapping: Map every user to their ZH and ZSM
+    // Hierarchy mapping
     const userMap = new Map();
     users.forEach(u => userMap.set(u.user_id, u));
 
@@ -890,51 +911,56 @@ router.get("/admin/insights-data", async (req, res) => {
 
     const groupedStats: Record<string, any> = { zh: {}, zsm: {} };
 
+    // Group submission counts by target_user
+    const userCompletionCounts: Record<string, number> = {};
+    submissions.forEach(s => {
+      userCompletionCounts[s.target_user] = (userCompletionCounts[s.target_user] || 0) + 1;
+    });
+
     users.forEach(u => {
       const zh = findManagerWithRole(u.user_id, ['ZH']);
       const zsm = findManagerWithRole(u.user_id, ['ZSM']);
       const role = (u.role || "").toUpperCase();
-      const submission = submissions.find(s => s.target_user === u.user_id);
-      const isDone = !!submission;
+      const doneCount = userCompletionCounts[u.user_id] || 0;
 
       if (zh) {
         if (!groupedStats.zh[zh.user_id]) groupedStats.zh[zh.user_id] = { name: zh.name, rm: { total: 0, done: 0 }, sm: { total: 0, done: 0 }, asm: { total: 0, done: 0 } };
         const stats = groupedStats.zh[zh.user_id];
-        if (role === 'RM') { stats.rm.total++; if (isDone) stats.rm.done++; }
-        if (role === 'SM') { stats.sm.total++; if (isDone) stats.sm.done++; }
-        if (role === 'ASM') { stats.asm.total++; if (isDone) stats.asm.done++; }
+        if (role === 'RM') { stats.rm.total += daysInRangeCount; stats.rm.done += doneCount; }
+        if (role === 'SM') { stats.sm.total += daysInRangeCount; stats.sm.done += doneCount; }
+        if (role === 'ASM') { stats.asm.total += daysInRangeCount; stats.asm.done += doneCount; }
       }
 
       if (zsm) {
         if (!groupedStats.zsm[zsm.user_id]) groupedStats.zsm[zsm.user_id] = { name: zsm.name, rm: { total: 0, done: 0 }, sm: { total: 0, done: 0 }, asm: { total: 0, done: 0 } };
         const stats = groupedStats.zsm[zsm.user_id];
-        if (role === 'RM') { stats.rm.total++; if (isDone) stats.rm.done++; }
-        if (role === 'SM') { stats.sm.total++; if (isDone) stats.sm.done++; }
-        if (role === 'ASM') { stats.asm.total++; if (isDone) stats.asm.done++; }
+        if (role === 'RM') { stats.rm.total += daysInRangeCount; stats.rm.done += doneCount; }
+        if (role === 'SM') { stats.sm.total += daysInRangeCount; stats.sm.done += doneCount; }
+        if (role === 'ASM') { stats.asm.total += daysInRangeCount; stats.asm.done += doneCount; }
       }
     });
 
-    // 6. Identify Bottom Performers (0% completion)
+    // 6. Identify Bottom Performers
     const bottomPerformers: Record<string, string[]> = { ZSM: [], SM: [], ASM: [] };
-    const performersByZSM: Record<string, any> = groupedStats.zsm;
     
-    Object.values(performersByZSM).forEach((zsm: any) => {
+    Object.values(groupedStats.zsm).forEach((zsm: any) => {
       const rmRate = zsm.rm.total > 0 ? (zsm.rm.done / zsm.rm.total) * 100 : 100;
       if (rmRate < bottomLimit) bottomPerformers.ZSM.push(zsm.name);
     });
 
-    // Also look for individual SMs/ASMs with 0%
     users.filter(u => ['SM', 'ASM'].includes(u.role?.toUpperCase())).forEach(u => {
-      const isDone = submissions.some(s => s.target_user === u.user_id);
-      if (!isDone) {
+      const rate = (userCompletionCounts[u.user_id] || 0) / daysInRangeCount * 100;
+      if (rate < bottomLimit) {
         if (u.role.toUpperCase() === 'SM') bottomPerformers.SM.push(u.name);
         if (u.role.toUpperCase() === 'ASM') bottomPerformers.ASM.push(u.name);
       }
     });
 
     res.json({
-      date,
-      topics: dailyTopics,
+      startDate,
+      endDate,
+      daysInRange: daysInRangeCount,
+      topics: finalTopics,
       stats: {
         totalUsers,
         totalSubmissions,
@@ -949,14 +975,14 @@ router.get("/admin/insights-data", async (req, res) => {
       sampleResponses: responses.slice(0, 800)
     });
   } catch (err: any) {
-    console.error("Insights data fetch error:", err);
-    res.status(500).json({ error: "Failed to fetch insights data" });
+    console.error("Insights range data fetch error:", err);
+    res.status(500).json({ error: "Failed to fetch range insights data" });
   }
 });
 
 router.post("/admin/generate-insights-v2", async (req, res) => {
-  const { date, data } = req.body;
-  if (!date || !data) return res.status(400).json({ error: "Date and data required" });
+  const { startDate, endDate, data } = req.body;
+  if (!startDate || !data) return res.status(400).json({ error: "Date range and data required" });
 
   const groqKey = (process.env.GROQ_API_KEY || "").trim();
   if (!groqKey) return res.status(500).json({ error: "GROQ_API_KEY not configured" });
@@ -990,18 +1016,21 @@ router.post("/admin/generate-insights-v2", async (req, res) => {
       } catch (e) {}
     }
 
-    const prompt = `Analyze the "Daily Choreography" field responses for ${date} and generate a Strategic Leadership Report for the Managing Director.
+    const dateRangeLabel = startDate === endDate ? startDate : `${startDate} to ${endDate}`;
+
+    const prompt = `Analyze the "Daily Choreography" field responses for period ${dateRangeLabel} and generate a Strategic Leadership Report for the Managing Director.
 Completion rate: ${data.stats?.participationRate?.toFixed(1)}%
-Total Submissions: ${data.stats?.totalSubmissions} / ${data.stats?.totalUsers}
+Total Submissions: ${data.stats?.totalSubmissions} across ${data.daysInRange} days
+Number of active field profiles: ${data.stats?.totalUsers}
 ${sectionInstructions}
 
-DAILY TOPICS BY LEVEL:
+DAILY TOPICS IN THE PERIOD:
 ${JSON.stringify(data.topics || {})}
 
 HIERARCHY COMPLETION (RMs/SMs/ASMs completed per ZH/ZSM):
 ${JSON.stringify(data.stats?.groupedStats || {})}
 
-BOTTOM PERFORMERS (Users with 0% or critical low completion):
+BOTTOM PERFORMERS (Users with critical low completion):
 ${JSON.stringify(data.stats?.bottomPerformers || {})}
 
 Sample responses for context: ${JSON.stringify(data.sampleResponses.slice(0, 80).map((r: any) => ({ q: r.question, a: r.answer })))}
@@ -1106,7 +1135,7 @@ Respond ONLY with this exact JSON structure:
   }
 });
 
-// Export Choreography Uptick Report (CSV)
+// Combined Unified Uptick Report (CSV) with Day-Wise Metrics
 router.get("/admin/export-uptick-report", async (req, res) => {
   const { startDate, endDate } = req.query;
   if (!startDate || !endDate) return res.status(400).json({ error: "Date range required" });
@@ -1119,6 +1148,17 @@ router.get("/admin/export-uptick-report", async (req, res) => {
     const userMap = new Map();
     users.forEach(u => userMap.set(u.user_id, u));
 
+    // Generate date sequence
+    const start = new Date(startDate as string);
+    const end = new Date(endDate as string);
+    const days: string[] = [];
+    let curr = new Date(start);
+    while (curr <= end) {
+      days.push(curr.toISOString().split('T')[0]);
+      curr.setDate(curr.getDate() + 1);
+    }
+    const daysInRange = days.length;
+
     const findManagerWithRole = (userId: string, targetRole: string) => {
       let current = userMap.get(userId);
       let depth = 0;
@@ -1130,52 +1170,72 @@ router.get("/admin/export-uptick-report", async (req, res) => {
       return null;
     };
 
-    // Calculate completion days per user
-    const userCompletionDays: Record<string, Set<string>> = {};
+    // user_id -> date -> count (1 or 0)
+    const userCompletions: Record<string, Set<string>> = {};
     submissions.forEach(s => {
-      if (!userCompletionDays[s.target_user]) userCompletionDays[s.target_user] = new Set();
-      userCompletionDays[s.target_user].add(s.date);
+      if (!userCompletions[s.target_user]) userCompletions[s.target_user] = new Set();
+      userCompletions[s.target_user].add(s.date);
     });
 
-    const daysInRange = Math.max(1, (new Date(endDate as string).getTime() - new Date(startDate as string).getTime()) / (1000 * 60 * 60 * 24) + 1);
+    const getReportForRole = (roleTag: string) => {
+      const data: Record<string, any> = {};
+      users.forEach(u => {
+        const mgr = findManagerWithRole(u.user_id, roleTag);
+        if (!mgr) return;
 
-    // Group by ZSM
-    const zsmReport: Record<string, any> = {};
+        if (!data[mgr.user_id]) {
+          data[mgr.user_id] = {
+            name: mgr.name,
+            RM: { total: 0, completions: 0 },
+            SM: { total: 0, completions: 0 },
+            ASM: { total: 0, completions: 0 },
+            daily: {} as Record<string, number>
+          };
+          days.forEach(d => data[mgr.user_id].daily[d] = 0);
+        }
 
-    users.forEach(u => {
-      const zsm = findManagerWithRole(u.user_id, 'ZSM');
-      if (!zsm) return;
+        const role = (u.role || "").toUpperCase();
+        const stats = data[mgr.user_id];
+        const doneDates = userCompletions[u.user_id] || new Set();
 
-      if (!zsmReport[zsm.user_id]) {
-        zsmReport[zsm.user_id] = { 
-          zsmName: zsm.name,
-          RM: { total: 0, completions: 0 },
-          SM: { total: 0, completions: 0 },
-          ASM: { total: 0, completions: 0 }
-        };
-      }
+        if (role === 'RM') { stats.RM.total++; stats.RM.completions += doneDates.size; }
+        if (role === 'SM') { stats.SM.total++; stats.SM.completions += doneDates.size; }
+        if (role === 'ASM') { stats.ASM.total++; stats.ASM.completions += doneDates.size; }
 
-      const role = (u.role || "").toUpperCase();
-      const stats = zsmReport[zsm.user_id];
-      const completions = userCompletionDays[u.user_id]?.size || 0;
+        doneDates.forEach(d => {
+          if (stats.daily[d] !== undefined) stats.daily[d]++;
+        });
+      });
+      return Object.values(data);
+    };
 
-      if (role === 'RM') { stats.RM.total++; stats.RM.completions += completions; }
-      if (role === 'SM') { stats.SM.total++; stats.SM.completions += completions; }
-      if (role === 'ASM') { stats.ASM.total++; stats.ASM.completions += completions; }
-    });
+    const zhData = getReportForRole('ZH');
+    const zsmData = getReportForRole('ZSM');
 
-    let csv = `ZSM Name,RM Adoption %,SM Adoption %,ASM Adoption %,Period: ${startDate} to ${endDate}\n`;
-    Object.values(zsmReport).forEach((r: any) => {
-      const rmPct = r.RM.total > 0 ? (r.RM.completions / (r.RM.total * daysInRange)) * 100 : 0;
-      const smPct = r.SM.total > 0 ? (r.SM.completions / (r.SM.total * daysInRange)) * 100 : 0;
-      const asmPct = r.ASM.total > 0 ? (r.ASM.completions / (r.ASM.total * daysInRange)) * 100 : 0;
-      csv += `"${r.zsmName}",${rmPct.toFixed(1)}%,${smPct.toFixed(1)}%,${asmPct.toFixed(1)}%\n`;
-    });
+    let csv = `UNIFIED CHOREOGRAPHY UPTICK REPORT\n`;
+    csv += `Period: ${startDate} to ${endDate}\n\n`;
+
+    const buildSection = (title: string, roleItems: any[]) => {
+      let s = `${title} LEVEL METRICS\n`;
+      s += `Name,RM Adoption %,SM Adoption %,ASM Adoption %,${days.join(",")}\n`;
+      roleItems.forEach(r => {
+        const rmPct = r.RM.total > 0 ? (r.RM.completions / (r.RM.total * daysInRange)) * 100 : 0;
+        const smPct = r.SM.total > 0 ? (r.SM.completions / (r.SM.total * daysInRange)) * 100 : 0;
+        const asmPct = r.ASM.total > 0 ? (r.ASM.completions / (r.ASM.total * daysInRange)) * 100 : 0;
+        const dailyCounts = days.map(d => r.daily[d]).join(",");
+        s += `"${r.name}",${rmPct.toFixed(1)}%,${smPct.toFixed(1)}%,${asmPct.toFixed(1)}%,${dailyCounts}\n`;
+      });
+      return s + "\n";
+    };
+
+    csv += buildSection("ZH", zhData);
+    csv += buildSection("ZSM", zsmData);
 
     res.setHeader('Content-Type', 'text/csv');
-    res.setHeader('Content-Disposition', `attachment; filename=ZSM_Uptick_Report_${startDate}_to_${endDate}.csv`);
+    res.setHeader('Content-Disposition', `attachment; filename=Unified_Uptick_Report_${startDate}_to_${endDate}.csv`);
     res.send(csv);
   } catch (err: any) {
+    console.error("Uptick export failed:", err);
     res.status(500).json({ error: err.message });
   }
 });
