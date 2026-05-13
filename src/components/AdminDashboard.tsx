@@ -26,6 +26,9 @@ export default function AdminDashboard({ setToast, onBack }: AdminDashboardProps
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [insightDate, setInsightDate] = useState(formatToday());
   const [isGeneratingInsight, setIsGeneratingInsight] = useState(false);
+  const [uptickStartDate, setUptickStartDate] = useState(formatToday());
+  const [uptickEndDate, setUptickEndDate] = useState(formatToday());
+  const [isExportingUptick, setIsExportingUptick] = useState(false);
 
   useEffect(() => {
     fetchStats();
@@ -252,6 +255,29 @@ export default function AdminDashboard({ setToast, onBack }: AdminDashboardProps
     }
   };
 
+  const handleExportUptick = async () => {
+    setIsExportingUptick(true);
+    setToast('Generating Uptick Trend Report...', 'ok');
+    try {
+      const response = await fetch(`/api/admin/export-uptick-report?startDate=${uptickStartDate}&endDate=${uptickEndDate}`);
+      if (!response.ok) throw new Error('Export failed');
+      
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `Choreography_Uptick_${uptickStartDate}_to_${uptickEndDate}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(url);
+      setToast('Uptick Report downloaded!', 'ok');
+    } catch (err: any) {
+      setToast(err.message || 'Export failed', 'err');
+    } finally {
+      setIsExportingUptick(false);
+    }
+  };
+
   const generateDeepInsightPDF = (report: any, rawData: any, date: string) => {
     const doc = new jsPDF();
     const pageWidth = doc.internal.pageSize.getWidth();
@@ -269,7 +295,7 @@ export default function AdminDashboard({ setToast, onBack }: AdminDashboardProps
       doc.rect(0, pageHeight - 15, pageWidth, 15, 'F');
       doc.setFontSize(8);
       doc.setTextColor(SLATE[0], SLATE[1], SLATE[2]);
-      doc.text(`Proprietary Strategic Analysis for Tata AIA Leadership | Confidential | Page ${pageNum} of ${totalPages}`, pageWidth / 2, pageHeight - 7, { align: 'center' });
+      doc.text(`Choreography Analysis for Tata AIA | Confidential | Page ${pageNum} of ${totalPages}`, pageWidth / 2, pageHeight - 7, { align: 'center' });
     };
 
     // PAGE 1: COVER PAGE
@@ -288,7 +314,7 @@ export default function AdminDashboard({ setToast, onBack }: AdminDashboardProps
     
     doc.setTextColor(GOLD[0], GOLD[1], GOLD[2]);
     doc.setFontSize(24);
-    doc.text("STRATEGIC LEADERSHIP REPORT", 30, pageHeight / 2 - 5);
+    doc.text("LEADERSHIP REPORT", 30, pageHeight / 2 - 5);
     
     doc.setDrawColor(255, 255, 255);
     doc.setLineWidth(1);
@@ -301,7 +327,7 @@ export default function AdminDashboard({ setToast, onBack }: AdminDashboardProps
     doc.text(`GENERATED ON: ${new Date().toLocaleString('en-IN')}`, 30, pageHeight / 2 + 30);
     
     doc.setFontSize(10);
-    doc.text("PREPARED FOR: Managing Director | Zonal Heads | National Sales Head", 30, pageHeight - 30);
+    doc.text("PREPARED FOR: TATA AIA DSF CHANNEL", 30, pageHeight - 30);
 
     // PAGE 2: EXECUTIVE SUMMARY & SENTIMENT
     doc.addPage();
@@ -368,6 +394,30 @@ export default function AdminDashboard({ setToast, onBack }: AdminDashboardProps
     doc.text(sentimentComm, 25, currentY + 28);
     
     currentY += 50;
+    
+    // Bottom Performers Analysis
+    if (report.bottom_performers_analysis) {
+      doc.setFillColor(254, 242, 242);
+      doc.roundedRect(15, currentY, pageWidth - 30, 35, 3, 3, 'F');
+      
+      doc.setTextColor(RED[0], RED[1], RED[2]);
+      doc.setFontSize(11);
+      doc.setFont("helvetica", "bold");
+      doc.text("LAGGING CLUSTERS & PROFILES", 25, currentY + 10);
+      
+      doc.setTextColor(NAVY[0], NAVY[1], NAVY[2]);
+      doc.setFontSize(9);
+      doc.setFont("helvetica", "normal");
+      const botComm = doc.splitTextToSize(report.bottom_performers_analysis.commentary || "", pageWidth - 50);
+      doc.text(botComm, 25, currentY + 16);
+      
+      doc.setFont("helvetica", "bold");
+      doc.text("Focus Profiles:", 25, currentY + 28);
+      doc.setFont("helvetica", "normal");
+      doc.text((report.bottom_performers_analysis.top_red_flag_names || []).join(", "), 55, currentY + 28);
+      
+      currentY += 50;
+    }
 
     // Operational Health Grid
     doc.setTextColor(NAVY[0], NAVY[1], NAVY[2]);
@@ -465,7 +515,7 @@ export default function AdminDashboard({ setToast, onBack }: AdminDashboardProps
     doc.setFillColor(NAVY[0], NAVY[1], NAVY[2]);
     doc.rect(15, currentY - 5, pageWidth - 30, 12, 'F');
     doc.setTextColor(255, 255, 255);
-    doc.text("FIELD RESPONSE INTELLIGENCE & QUALITY", 20, currentY + 3);
+    doc.text("FIELD RESPONSE QUALITY", 20, currentY + 3);
     
     currentY += 15;
 
@@ -487,7 +537,7 @@ export default function AdminDashboard({ setToast, onBack }: AdminDashboardProps
     // Topic Intelligence
     doc.setTextColor(NAVY[0], NAVY[1], NAVY[2]);
     doc.setFontSize(12);
-    doc.text("COACHING & TOPIC ALIGNMENT", 15, currentY);
+    doc.text("CHOREOGRAPHY & TOPIC ALIGNMENT", 15, currentY);
     
     const topicData = [
       ["RM-SM Interaction", report.topic_intelligence?.rm_sm || "N/A"],
@@ -598,9 +648,9 @@ export default function AdminDashboard({ setToast, onBack }: AdminDashboardProps
     currentY += 15;
 
     const actionCols = [
-      { t: "IMMEDIATE (0-24 HRS)", data: report.action_plan?.immediate || [] },
-      { t: "SHORT-TERM (1-7 DAYS)", data: report.action_plan?.short_term || [] },
-      { t: "STRATEGIC (30+ DAYS)", data: report.action_plan?.strategic || [] }
+      { t: "IMMEDIATE", data: report.action_plan?.immediate || [] },
+      { t: "SHORT-TERM", data: report.action_plan?.short_term || [] },
+      { t: "STRATEGIC", data: report.action_plan?.strategic || [] }
     ];
 
     actionCols.forEach(col => {
@@ -902,6 +952,31 @@ export default function AdminDashboard({ setToast, onBack }: AdminDashboardProps
                     Generate PDF
                   </>
                 )}
+              </button>
+            </div>
+            
+            <div className="flex items-center gap-2 mt-4 pt-4 border-t border-slate-100">
+              <div className="flex-1 flex gap-2">
+                <input 
+                  type="date"
+                  value={uptickStartDate}
+                  onChange={(e) => setUptickStartDate(e.target.value)}
+                  className="w-full px-2 py-2 bg-slate-50 border border-slate-100 rounded-lg text-[10px] outline-none"
+                />
+                <input 
+                  type="date"
+                  value={uptickEndDate}
+                  onChange={(e) => setUptickEndDate(e.target.value)}
+                  className="w-full px-2 py-2 bg-slate-50 border border-slate-100 rounded-lg text-[10px] outline-none"
+                />
+              </div>
+              <button
+                onClick={handleExportUptick}
+                disabled={isExportingUptick}
+                className="px-3 py-2 bg-emerald-600 text-white rounded-lg text-[10px] font-bold hover:bg-emerald-700 disabled:opacity-50 flex items-center gap-1"
+              >
+                {isExportingUptick ? <Clock className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3" />}
+                Uptick CSV
               </button>
             </div>
           </div>
