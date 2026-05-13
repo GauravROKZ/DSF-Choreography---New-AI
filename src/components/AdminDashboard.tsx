@@ -215,147 +215,443 @@ export default function AdminDashboard({ setToast, onBack }: AdminDashboardProps
   };
 
   const handleGenerateAIInsight = async () => {
-  if (!insightDate) return setToast('Please select a date for the MD report', 'err');
-  setIsGeneratingInsight(true);
-  setToast('Fetching choreography responses for deep analysis...', 'ok');
+    if (!insightDate) return setToast('Please select a date for the MD report', 'err');
+    setIsGeneratingInsight(true);
+    setToast('Fetching choreography responses for deep analysis...', 'ok');
 
-  try {
-    const dataRes = await fetch(`/api/admin/insights-data?date=${insightDate}`);
-    if (!dataRes.ok) throw new Error('Data fetch failed');
-    const data = await dataRes.json();
+    try {
+      const dataRes = await fetch(`/api/admin/insights-data?date=${insightDate}`);
+      if (!dataRes.ok) throw new Error('Data fetch failed');
+      const data = await dataRes.json();
 
-    if (!data.sampleResponses || data.sampleResponses.length === 0) {
-      throw new Error('No responses found for this date to analyze');
+      if (!data.sampleResponses || data.sampleResponses.length === 0) {
+        throw new Error('No responses found for this date to analyze');
+      }
+
+      setToast('AI is analyzing field responses...', 'ok');
+
+      const insightRes = await fetch('/api/admin/generate-insights-v2', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ date: insightDate, data })
+      });
+
+      if (!insightRes.ok) {
+        const errorData = await insightRes.json();
+        throw new Error(errorData.details || errorData.error || 'AI Insight generation failed');
+      }
+
+      const reportData = await insightRes.json();
+      generateDeepInsightPDF(reportData, data, insightDate);
+      setToast('MD Strategic Insight Report generated!', 'ok');
+    } catch (err: any) {
+      console.error('AI Insight error:', err);
+      setToast(err.message || 'Failed to generate AI insights', 'err');
+    } finally {
+      setIsGeneratingInsight(false);
     }
+  };
 
-    setToast('AI is analyzing field responses...', 'ok');
-
-    const insightRes = await fetch('/api/admin/generate-insights-v2', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ date: insightDate, data })
-    });
-
-    if (!insightRes.ok) {
-      const errorData = await insightRes.json();
-      throw new Error(errorData.details || errorData.error || 'AI Insight generation failed');
-    }
-
-    const reportData = await insightRes.json();
-    generateDeepInsightPDF(reportData, data, insightDate);
-    setToast('MD Strategic Insight Report generated!', 'ok');
-  } catch (err: any) {
-    setToast(err.message || 'Failed to generate AI insights', 'err');
-  } finally {
-    setIsGeneratingInsight(false);
-  }
-};
-  
   const generateDeepInsightPDF = (report: any, rawData: any, date: string) => {
     const doc = new jsPDF();
     const pageWidth = doc.internal.pageSize.getWidth();
+    const pageHeight = doc.internal.pageSize.getHeight();
     
-    // Header
-    doc.setFillColor(26, 42, 74); 
-    doc.rect(0, 0, pageWidth, 40, 'F');
+    // Brand Colors (as tuples for TS)
+    const NAVY: [number, number, number] = [26, 42, 74];
+    const RED: [number, number, number] = [200, 16, 46];
+    const GOLD: [number, number, number] = [184, 134, 11];
+    const SLATE: [number, number, number] = [100, 116, 139];
+
+    const addFooter = (pageNum: number, totalPages: number) => {
+      doc.setPage(pageNum);
+      doc.setFillColor(248, 250, 252);
+      doc.rect(0, pageHeight - 15, pageWidth, 15, 'F');
+      doc.setFontSize(8);
+      doc.setTextColor(SLATE[0], SLATE[1], SLATE[2]);
+      doc.text(`Proprietary Strategic Analysis for Tata AIA Leadership | Confidential | Page ${pageNum} of ${totalPages}`, pageWidth / 2, pageHeight - 7, { align: 'center' });
+    };
+
+    // PAGE 1: COVER PAGE
+    doc.setFillColor(NAVY[0], NAVY[1], NAVY[2]);
+    doc.rect(0, 0, pageWidth, pageHeight, 'F');
+    
+    // Vertical Accent Line (Gold)
+    doc.setFillColor(GOLD[0], GOLD[1], GOLD[2]);
+    doc.rect(15, 0, 2, pageHeight, 'F');
+
     doc.setTextColor(255, 255, 255);
-    doc.setFontSize(20);
-    doc.text("STRATEGIC CHOREOGRAPHY INSIGHTS", 15, 20);
+    doc.setFontSize(36);
+    doc.setFont("helvetica", "bold");
+    doc.text("DAILY", 30, pageHeight / 2 - 40);
+    doc.text("CHOREOGRAPHY", 30, pageHeight / 2 - 25);
+    
+    doc.setTextColor(GOLD[0], GOLD[1], GOLD[2]);
+    doc.setFontSize(24);
+    doc.text("STRATEGIC LEADERSHIP REPORT", 30, pageHeight / 2 - 5);
+    
+    doc.setDrawColor(255, 255, 255);
+    doc.setLineWidth(1);
+    doc.line(30, pageHeight / 2 + 5, 120, pageHeight / 2 + 5);
+    
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(14);
+    doc.setFont("helvetica", "normal");
+    doc.text(`REPORTING DATE: ${date}`, 30, pageHeight / 2 + 20);
+    doc.text(`GENERATED ON: ${new Date().toLocaleString('en-IN')}`, 30, pageHeight / 2 + 30);
+    
     doc.setFontSize(10);
-    doc.text(`Proprietary Analysis for Senior Management | Confidential | Date: ${date}`, 15, 30);
+    doc.text("PREPARED FOR: Managing Director | Zonal Heads | National Sales Head", 30, pageHeight - 30);
+
+    // PAGE 2: EXECUTIVE SUMMARY & SENTIMENT
+    doc.addPage();
+    let currentY = 25;
     
-    let currentY = 55;
-
-    // Executive Summary
-    doc.setTextColor(200, 16, 46);
+    // Title
+    doc.setFillColor(NAVY[0], NAVY[1], NAVY[2]);
+    doc.rect(15, currentY - 5, pageWidth - 30, 12, 'F');
+    doc.setTextColor(255, 255, 255);
     doc.setFontSize(14);
-    doc.text("Executive Summary", 15, currentY);
-    doc.setTextColor(60, 60, 60);
-    doc.setFontSize(11);
-    const summaryLines = doc.splitTextToSize(report.executive_summary, pageWidth - 30);
-    doc.text(summaryLines, 15, currentY + 8);
+    doc.setFont("helvetica", "bold");
+    doc.text("EXECUTIVE OVERVIEW", 20, currentY + 3);
     
-    currentY += 15 + (summaryLines.length * 6);
+    currentY += 20;
 
-    // Operational Snapshot (Condensed as requested)
-    doc.setTextColor(26, 42, 74);
-    doc.setFontSize(12);
-    doc.text(`Daily Progress: ${rawData.stats.participationRate.toFixed(1)}% Completion Rate (${rawData.stats.totalSubmissions}/${rawData.stats.totalUsers} users)`, 15, currentY);
-    currentY += 12;
-
-    // Feedback Themes & Charts
-    doc.setTextColor(200, 16, 46);
-    doc.setFontSize(14);
-    doc.text("Feedback Volume & Themes", 15, currentY);
-    currentY += 10;
-
-    // Simple Bar Chart for Themes
-    report.themes.forEach((theme: any, index: number) => {
-      const barWidth = (pageWidth - 80) * (theme.percentage / 100);
-      
+    // Daily Topics at Top
+    if (rawData.topics) {
+      doc.setTextColor(RED[0], RED[1], RED[2]);
       doc.setFontSize(10);
-      doc.setTextColor(60, 60, 60);
-      doc.text(theme.name, 15, currentY + 5);
-      
-      doc.setFillColor(230, 230, 230);
-      doc.rect(70, currentY, (pageWidth - 80), 6, 'F');
-      doc.setFillColor(0, 102, 178); // Blue bars
-      doc.rect(70, currentY, barWidth, 6, 'F');
-      
-      doc.text(`${theme.percentage}%`, pageWidth - 15, currentY + 5, { align: 'right' });
-      
-      currentY += 12;
+      doc.text("DAILY CHOREOGRAPHY TOPICS:", 15, currentY);
+      currentY += 6;
       doc.setFontSize(9);
-      doc.setTextColor(100, 100, 100);
-      const themeInsight = doc.splitTextToSize(theme.insight, pageWidth - 85);
-      doc.text(themeInsight, 70, currentY);
-      currentY += (themeInsight.length * 5) + 5;
-    });
-
-    // Check for page overflow
-    if (currentY > 230) {
-      doc.addPage();
-      currentY = 20;
+      doc.setTextColor(NAVY[0], NAVY[1], NAVY[2]);
+      Object.entries(rawData.topics).forEach(([lvl, topic]: [string, any]) => {
+        doc.setFont("helvetica", "bold");
+        doc.text(`${lvl}:`, 15, currentY);
+        doc.setFont("helvetica", "normal");
+        doc.text(`${topic}`, 45, currentY);
+        currentY += 5;
+      });
+      currentY += 10;
     }
 
-    // Red Flags
-    doc.setTextColor(200, 16, 46);
-    doc.setFontSize(14);
-    doc.text("Critical Red Flags / Blockers", 15, currentY);
-    currentY += 8;
-    doc.setTextColor(60, 60, 60);
+    // Narrative Summary
+    doc.setTextColor(NAVY[0], NAVY[1], NAVY[2]);
     doc.setFontSize(11);
-    report.red_flags.forEach((flag: string) => {
-      const flagLines = doc.splitTextToSize(`• ${flag}`, pageWidth - 30);
-      doc.text(flagLines, 15, currentY);
-      currentY += (flagLines.length * 6);
+    doc.setFont("helvetica", "normal");
+    const summaryLines = doc.splitTextToSize(report.executive_summary || "No summary available.", pageWidth - 30);
+    doc.text(summaryLines, 15, currentY);
+    currentY += (summaryLines.length * 6) + 15;
+
+    // Sentiment Index Section
+    doc.setFillColor(241, 245, 249);
+    doc.roundedRect(15, currentY, pageWidth - 30, 35, 3, 3, 'F');
+    
+    doc.setTextColor(RED[0], RED[1], RED[2]);
+    doc.setFontSize(12);
+    doc.text("FIELD SENTIMENT INDEX", 25, currentY + 12);
+    
+    const sentimentScore = report.sentiment?.index || 0;
+    doc.setDrawColor(SLATE[0], SLATE[1], SLATE[2]);
+    doc.rect(25, currentY + 18, 100, 6, 'S');
+    doc.setFillColor(sentimentScore > 70 ? 34 : sentimentScore > 40 ? 245 : 220, sentimentScore > 70 ? 197 : sentimentScore > 40 ? 158 : 38, sentimentScore > 70 ? 94 : sentimentScore > 40 ? 11 : 38);
+    doc.rect(25, currentY + 18, sentimentScore, 6, 'F');
+    
+    doc.setFontSize(24);
+    doc.text(`${sentimentScore}`, 135, currentY + 18);
+    doc.setFontSize(10);
+    doc.text("/ 100", 153, currentY + 18);
+    
+    doc.setFontSize(9);
+    doc.setTextColor(SLATE[0], SLATE[1], SLATE[2]);
+    const sentimentComm = doc.splitTextToSize(report.sentiment?.commentary || "", pageWidth - 50);
+    doc.text(sentimentComm, 25, currentY + 28);
+    
+    currentY += 50;
+
+    // Operational Health Grid
+    doc.setTextColor(NAVY[0], NAVY[1], NAVY[2]);
+    doc.setFontSize(12);
+    doc.text("OPERATIONAL HEALTH COMMENTARY", 15, currentY);
+    
+    const healthData = [
+      ["Coaching Adoption", report.operational_health?.coaching_adoption || "N/A"],
+      ["Field Discipline", report.operational_health?.discipline || "N/A"],
+      ["Governance Maturity", report.operational_health?.governance || "N/A"]
+    ];
+
+    autoTable(doc, {
+      startY: currentY + 5,
+      head: [['Metric', 'AI Strategic Assessment']],
+      body: healthData,
+      theme: 'striped',
+      headStyles: { fillColor: NAVY, textColor: [255, 255, 255], fontStyle: 'bold' },
+      styles: { fontSize: 9, cellPadding: 4 },
+      columnStyles: { 0: { fontStyle: 'bold', cellWidth: 50 } }
     });
+
+    // PAGE 3: DETAILED HIERARCHY ANALYTICS
+    doc.addPage();
+    currentY = 25;
+    
+    doc.setFillColor(NAVY[0], NAVY[1], NAVY[2]);
+    doc.rect(15, currentY - 5, pageWidth - 30, 12, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.text("ZH / ZSM LEVEL COMPLETION BREAKDOWN", 20, currentY + 3);
+    
+    currentY += 15;
+    
+    // ZH Table
+    if (rawData.stats?.groupedStats?.zh) {
+      doc.setTextColor(RED[0], RED[1], RED[2]);
+      doc.setFontSize(11);
+      doc.text("ZONAL HEAD (ZH) COMPLETION METRICS", 15, currentY);
+      currentY += 5;
+
+      const zhTable = Object.values(rawData.stats.groupedStats.zh).map((zh: any) => [
+        zh.name,
+        `${zh.rm.done}/${zh.rm.total}`,
+        `${zh.sm.done}/${zh.sm.total}`,
+        `${zh.asm.done}/${zh.asm.total}`,
+        `${(zh.rm.total > 0 ? (zh.rm.done/zh.rm.total)*100 : 0).toFixed(0)}%`
+      ]);
+
+      autoTable(doc, {
+        startY: currentY,
+        head: [['ZH Name', 'RMs Done', 'SMs Done', 'ASMs Done', 'RM %']],
+        body: zhTable,
+        theme: 'grid',
+        headStyles: { fillColor: NAVY, fontStyle: 'bold' },
+        styles: { fontSize: 8 },
+        columnStyles: { 4: { fontStyle: 'bold', textColor: RED } }
+      });
+      
+      currentY = (doc as any).lastAutoTable.finalY + 15;
+    }
+
+    // ZSM Table
+    if (rawData.stats?.groupedStats?.zsm) {
+      if (currentY > 230) { doc.addPage(); currentY = 25; }
+      doc.setTextColor(RED[0], RED[1], RED[2]);
+      doc.setFontSize(11);
+      doc.text("ZONAL SALES MANAGER (ZSM) COMPLETION METRICS", 15, currentY);
+      currentY += 5;
+
+      const zsmTable = Object.values(rawData.stats.groupedStats.zsm).map((zsm: any) => [
+        zsm.name,
+        `${zsm.rm.done}/${zsm.rm.total}`,
+        `${zsm.sm.done}/${zsm.sm.total}`,
+        `${zsm.asm.done}/${zsm.asm.total}`,
+        `${(zsm.rm.total > 0 ? (zsm.rm.done/zsm.rm.total)*100 : 0).toFixed(0)}%`
+      ]);
+
+      autoTable(doc, {
+        startY: currentY,
+        head: [['ZSM Name', 'RMs Done', 'SMs Done', 'ASMs Done', 'RM %']],
+        body: zsmTable,
+        theme: 'grid',
+        headStyles: { fillColor: GOLD, fontStyle: 'bold' },
+        styles: { fontSize: 8 },
+        columnStyles: { 4: { fontStyle: 'bold', textColor: RED } }
+      });
+      
+      currentY = (doc as any).lastAutoTable.finalY + 15;
+    }
+
+    // TOPIC & RESPONSE INTELLIGENCE PAGE
+    doc.addPage();
+    currentY = 25;
+    
+    doc.setFillColor(NAVY[0], NAVY[1], NAVY[2]);
+    doc.rect(15, currentY - 5, pageWidth - 30, 12, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.text("FIELD RESPONSE INTELLIGENCE & QUALITY", 20, currentY + 3);
+    
+    currentY += 15;
+
+    // Field Updates Insight
+    doc.setFillColor(248, 250, 252);
+    doc.roundedRect(15, currentY, pageWidth - 30, 30, 2, 2, 'F');
+    doc.setTextColor(GOLD[0], GOLD[1], GOLD[2]);
+    doc.setFontSize(11);
+    doc.setFont("helvetica", "bold");
+    doc.text("FIELD UPDATE QUALITY ASSESSMENT", 20, currentY + 10);
+    doc.setTextColor(NAVY[0], NAVY[1], NAVY[2]);
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
+    const fuInsight = doc.splitTextToSize(report.response_intelligence?.field_updates_insight || "Data synthesis in progress...", pageWidth - 40);
+    doc.text(fuInsight, 20, currentY + 18);
+    
+    currentY += 40;
+
+    // Topic Intelligence
+    doc.setTextColor(NAVY[0], NAVY[1], NAVY[2]);
+    doc.setFontSize(12);
+    doc.text("COACHING & TOPIC ALIGNMENT", 15, currentY);
+    
+    const topicData = [
+      ["RM-SM Interaction", report.topic_intelligence?.rm_sm || "N/A"],
+      ["SM-ASM Interaction", report.topic_intelligence?.sm_asm || "N/A"],
+      ["ASM-ZSH Interaction", report.topic_intelligence?.asm_zsh || "N/A"]
+    ];
+
+    autoTable(doc, {
+      startY: currentY + 5,
+      body: topicData,
+      theme: 'grid',
+      styles: { fontSize: 9, cellPadding: 5 },
+      columnStyles: { 0: { fontStyle: 'bold', cellWidth: 40, fillColor: [241, 245, 249] } }
+    });
+
+    currentY = (doc as any).lastAutoTable.finalY + 15;
+
+    doc.setTextColor(NAVY[0], NAVY[1], NAVY[2]);
+    doc.setFontSize(12);
+    doc.text("AI TREND ANALYSIS", 15, currentY);
+    currentY += 8;
+    doc.setFontSize(9);
+    const trendsLines = doc.splitTextToSize(report.response_intelligence?.trends || "", pageWidth - 30);
+    doc.text(trendsLines, 15, currentY);
+    currentY += (trendsLines.length * 5) + 10;
+
+    doc.setFont("helvetica", "bold");
+    doc.text("ANOMALIES / UNUSUAL PATTERNS:", 15, currentY);
+    currentY += 6;
+    doc.setFont("helvetica", "normal");
+    const anomLines = doc.splitTextToSize(report.response_intelligence?.unusual_patterns || "No anomalies detected.", pageWidth - 30);
+    doc.text(anomLines, 15, currentY);
+
+    // PAGE 4: STRATEGIC THEME ANALYSIS
+    doc.addPage();
+    currentY = 25;
+    
+    doc.setFillColor(NAVY[0], NAVY[1], NAVY[2]);
+    doc.rect(15, currentY - 5, pageWidth - 30, 12, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.text("FIELD FEEDBACK THEME EXTRACTION", 20, currentY + 3);
+    
+    currentY += 15;
+
+    (report.themes || []).forEach((theme: any, idx: number) => {
+      if (currentY > 260) { doc.addPage(); currentY = 25; }
+      
+      doc.setTextColor(NAVY[0], NAVY[1], NAVY[2]);
+      doc.setFontSize(11);
+      doc.setFont("helvetica", "bold");
+      doc.text(theme.name || "Theme", 15, currentY);
+      
+      // Theme bar
+      const barY = currentY + 2;
+      doc.setFillColor(241, 245, 249);
+      doc.rect(15, barY, 100, 4, 'F');
+      doc.setFillColor(idx % 2 === 0 ? RED[0] : GOLD[0], idx % 2 === 0 ? RED[1] : GOLD[1], idx % 2 === 0 ? RED[2] : GOLD[2]);
+      doc.rect(15, barY, theme.percentage || 0, 4, 'F');
+      
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(10);
+      doc.text(`${theme.percentage}% Occurrence`, 120, barY + 3.5);
+      
+      currentY += 10;
+      doc.setFontSize(9);
+      doc.setTextColor(SLATE[0], SLATE[1], SLATE[2]);
+      const themeInsight = doc.splitTextToSize(theme.insight || "", pageWidth - 30);
+      doc.text(themeInsight, 15, currentY);
+      
+      currentY += (themeInsight.length * 5) + 10;
+    });
+
+    // PAGE 5: RED FLAGS & ACTION PLAN
+    doc.addPage();
+    currentY = 25;
+    
+    doc.setFillColor(RED[0], RED[1], RED[2]);
+    doc.rect(15, currentY - 5, pageWidth - 30, 12, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.text("CRITICAL RED FLAGS & RISKS", 20, currentY + 3);
+    
+    currentY += 15;
+    
+    if (report.red_flags && Array.isArray(report.red_flags)) {
+      report.red_flags.forEach((flag: any) => {
+        doc.setFillColor(flag.severity === 'High' ? 254 : 255, flag.severity === 'High' ? 242 : 251, flag.severity === 'High' ? 242 : 235);
+        doc.roundedRect(15, currentY, pageWidth - 30, 15, 2, 2, 'F');
+        
+        doc.setFontSize(10);
+        doc.setFont("helvetica", "bold");
+        doc.setTextColor(flag.severity === 'High' ? RED[0] : 180, flag.severity === 'High' ? RED[1] : 83, flag.severity === 'High' ? RED[2] : 9);
+        doc.text(`[${flag.category || 'BLOCKER'}]`, 20, currentY + 6);
+        
+        doc.setFont("helvetica", "normal");
+        doc.setTextColor(NAVY[0], NAVY[1], NAVY[2]);
+        doc.text(flag.issue || "", 20, currentY + 11);
+        currentY += 20;
+      });
+    }
 
     currentY += 10;
+    doc.setFillColor(NAVY[0], NAVY[1], NAVY[2]);
+    doc.rect(15, currentY - 5, pageWidth - 30, 12, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFont("helvetica", "bold");
+    doc.text("RECOMMENDED STRATEGIC ACTION PLAN", 20, currentY + 3);
+    
+    currentY += 15;
 
-    // Strategic Action Items
-    doc.setTextColor(0, 102, 178);
-    doc.setFontSize(14);
-    doc.text("Recommended Action Plan", 15, currentY);
-    currentY += 8;
-    doc.setTextColor(60, 60, 60);
-    doc.setFontSize(11);
-    report.action_items.forEach((item: string, i: number) => {
-      const itemLines = doc.splitTextToSize(`${i + 1}. ${item}`, pageWidth - 30);
-      doc.text(itemLines, 15, currentY);
-      currentY += (itemLines.length * 6);
+    const actionCols = [
+      { t: "IMMEDIATE (0-24 HRS)", data: report.action_plan?.immediate || [] },
+      { t: "SHORT-TERM (1-7 DAYS)", data: report.action_plan?.short_term || [] },
+      { t: "STRATEGIC (30+ DAYS)", data: report.action_plan?.strategic || [] }
+    ];
+
+    actionCols.forEach(col => {
+      doc.setTextColor(RED[0], RED[1], RED[2]);
+      doc.setFontSize(10);
+      doc.setFont("helvetica", "bold");
+      doc.text(col.t, 15, currentY);
+      currentY += 6;
+      
+      doc.setTextColor(NAVY[0], NAVY[1], NAVY[2]);
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(9);
+      col.data.forEach((item: string) => {
+        const lines = doc.splitTextToSize(`• ${item}`, pageWidth - 30);
+        doc.text(lines, 15, currentY);
+        currentY += (lines.length * 5);
+      });
+      currentY += 5;
     });
 
-    // Footer
-    const pageCount = (doc as any).internal.getNumberOfPages();
-    for (let i = 1; i <= pageCount; i++) {
-        doc.setPage(i);
-        doc.setFontSize(9);
-        doc.setTextColor(150, 150, 150);
-        doc.text(`Sentiment Index: ${report.field_sentiment_score}/100 | Page ${i} of ${pageCount}`, pageWidth / 2, doc.internal.pageSize.getHeight() - 10, { align: 'center' });
+    // FIELD INTELLIGENCE
+    if (currentY > 180) { doc.addPage(); currentY = 25; } else { currentY += 10; }
+    
+    doc.setFillColor(GOLD[0], GOLD[1], GOLD[2]);
+    doc.rect(15, currentY - 5, pageWidth - 30, 12, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFont("helvetica", "bold");
+    doc.text("RESPONSE TRENDS & INTELLIGENCE", 20, currentY + 3);
+    
+    currentY += 10;
+    doc.setTextColor(NAVY[0], NAVY[1], NAVY[2]);
+    doc.setFontSize(9);
+    doc.setFont("helvetica", "normal");
+    const ri = doc.splitTextToSize(report.response_intelligence?.trends || "", pageWidth - 30);
+    doc.text(ri, 15, currentY);
+    currentY += (ri.length * 5) + 5;
+    
+    doc.setFont("helvetica", "bold");
+    doc.text("ANOMALIES / UNUSUAL PATTERNS:", 15, currentY);
+    currentY += 5;
+    doc.setFont("helvetica", "normal");
+    const anom = doc.splitTextToSize(report.response_intelligence?.unusual_patterns || "No anomalies detected.", pageWidth - 30);
+    doc.text(anom, 15, currentY);
+
+    // FINALIZE: Add footers to all pages
+    const totalPages = (doc as any).internal.getNumberOfPages();
+    for (let i = 1; i <= totalPages; i++) {
+      addFooter(i, totalPages);
     }
 
-    doc.save(`Strategic_Insight_${date}.pdf`);
+    doc.save(`TataAIA_StrategicReport_${date}.pdf`);
   };
 
   return (
