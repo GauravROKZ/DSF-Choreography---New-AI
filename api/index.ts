@@ -837,6 +837,10 @@ router.get("/admin/insights-data", async (req, res) => {
   if (!date) return res.status(400).json({ error: "Date required" });
 
   try {
+    const settings = await getSettings();
+    const redFlagLimit = Number(settings.red_flag_threshold || 50);
+    const bottomLimit = Number(settings.bottom_performer_threshold || 30);
+
     // 1. Fetch all submissions for the date
     const submissions = await fetchLargeTable('submissions', '*', (q: any) => q.eq('date', date));
     
@@ -916,7 +920,7 @@ router.get("/admin/insights-data", async (req, res) => {
     
     Object.values(performersByZSM).forEach((zsm: any) => {
       const rmRate = zsm.rm.total > 0 ? (zsm.rm.done / zsm.rm.total) * 100 : 100;
-      if (rmRate < 30) bottomPerformers.ZSM.push(zsm.name);
+      if (rmRate < bottomLimit) bottomPerformers.ZSM.push(zsm.name);
     });
 
     // Also look for individual SMs/ASMs with 0%
@@ -958,9 +962,38 @@ router.post("/admin/generate-insights-v2", async (req, res) => {
   if (!groqKey) return res.status(500).json({ error: "GROQ_API_KEY not configured" });
 
   try {
+    const settings = await getSettings();
+    let sectionInstructions = "";
+    if (settings.enabled_sections) {
+      try {
+        const enabled = typeof settings.enabled_sections === 'string' 
+          ? JSON.parse(settings.enabled_sections) 
+          : settings.enabled_sections;
+        
+        const sectionMap: Record<string, string> = {
+          executiveSummary: "Detailed executive summary analysis.",
+          sentimentIdx: "Field sentiment index and commentary.",
+          bottomPerformers: "Strategic analysis of lagging clusters.",
+          fieldThemes: "Trend extraction and thematic analysis.",
+          redFlags: "Identification of critical red flags.",
+          actionPlan: "Recommended immediate and strategic action plan.",
+          topicAlignment: "Analysis of coaching quality and topic intelligence."
+        };
+
+        const activeDescs = Object.entries(enabled)
+          .filter(([k, v]) => v && sectionMap[k])
+          .map(([k, v]) => (sectionMap as any)[k]);
+        
+        if (activeDescs.length > 0) {
+          sectionInstructions = `\nPRIORITIZE THESE SECTIONS IN YOUR ANALYSIS:\n- ${activeDescs.join('\n- ')}`;
+        }
+      } catch (e) {}
+    }
+
     const prompt = `Analyze the "Daily Choreography" field responses for ${date} and generate a Strategic Leadership Report for the Managing Director.
 Completion rate: ${data.stats?.participationRate?.toFixed(1)}%
 Total Submissions: ${data.stats?.totalSubmissions} / ${data.stats?.totalUsers}
+${sectionInstructions}
 
 DAILY TOPICS BY LEVEL:
 ${JSON.stringify(data.topics || {})}
