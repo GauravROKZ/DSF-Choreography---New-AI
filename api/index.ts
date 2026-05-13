@@ -4,7 +4,6 @@ import dotenv from 'dotenv';
 import multer from 'multer';
 import Papa from 'papaparse';
 
-import axios from "axios";
 import https from "https";
 
 dotenv.config();
@@ -848,36 +847,79 @@ router.get("/admin/insights-data", async (req, res) => {
     // We'll limit this to first 1000 responses to avoid payload overflow, but usually it's enough for AI to see trends
     const responses = await fetchLargeTable('responses', '*', (q: any) => q.eq('date', date));
 
-    // 4. Aggregate some stats for the AI
+    // 4. Fetch daily topics for context
+    const { data: topicsData } = await supabase
+      .from('questions')
+      .select('topic, level')
+      .eq('day', getFormattedDateDDMMYY(new Date(date as string)));
+    
+    const dailyTopics: Record<string, string> = {};
+    if (topicsData) {
+      topicsData.forEach(t => {
+        if (t.topic && t.level) {
+          const l = t.level.toUpperCase();
+          if (!dailyTopics[l]) dailyTopics[l] = t.topic;
+        }
+      });
+    }
+
+    // 5. Aggregate stats for the AI
     const totalUsers = users.length;
     const totalSubmissions = submissions.length;
     const participationRate = totalUsers > 0 ? (totalSubmissions / totalUsers) * 100 : 0;
 
-    const roleStats: Record<string, any> = {};
-    users.forEach(u => {
-      const r = (u.role || "UNKNOWN").toUpperCase();
-      if (!roleStats[r]) roleStats[r] = { total: 0, completed: 0 };
-      roleStats[r].total++;
-    });
+    // Advanced Hierarchy mapping: Map every user to their ZH and ZSM
+    const userMap = new Map();
+    users.forEach(u => userMap.set(u.user_id, u));
 
-    submissions.forEach(s => {
-      // Find target user's role
-      const targetUser = users.find(u => u.user_id === s.target_user);
-      if (targetUser) {
-        const r = (targetUser.role || "UNKNOWN").toUpperCase();
-        if (roleStats[r]) roleStats[r].completed++;
+    const findManagerWithRole = (userId: string, targetRoles: string[]) => {
+      let current = userMap.get(userId);
+      let depth = 0;
+      while (current && depth < 10) {
+        const role = (current.role || "").toUpperCase();
+        if (targetRoles.some(tr => role.includes(tr))) return current;
+        current = userMap.get(current.manager_id);
+        depth++;
+      }
+      return null;
+    };
+
+    const groupedStats: Record<string, any> = { zh: {}, zsm: {} };
+
+    users.forEach(u => {
+      const zh = findManagerWithRole(u.user_id, ['ZH']);
+      const zsm = findManagerWithRole(u.user_id, ['ZSM']);
+      const role = (u.role || "").toUpperCase();
+      const submission = submissions.find(s => s.target_user === u.user_id);
+      const isDone = !!submission;
+
+      if (zh) {
+        if (!groupedStats.zh[zh.user_id]) groupedStats.zh[zh.user_id] = { name: zh.name, rm: { total: 0, done: 0 }, sm: { total: 0, done: 0 }, asm: { total: 0, done: 0 } };
+        const stats = groupedStats.zh[zh.user_id];
+        if (role === 'RM') { stats.rm.total++; if (isDone) stats.rm.done++; }
+        if (role === 'SM') { stats.sm.total++; if (isDone) stats.sm.done++; }
+        if (role === 'ASM') { stats.asm.total++; if (isDone) stats.asm.done++; }
+      }
+
+      if (zsm) {
+        if (!groupedStats.zsm[zsm.user_id]) groupedStats.zsm[zsm.user_id] = { name: zsm.name, rm: { total: 0, done: 0 }, sm: { total: 0, done: 0 }, asm: { total: 0, done: 0 } };
+        const stats = groupedStats.zsm[zsm.user_id];
+        if (role === 'RM') { stats.rm.total++; if (isDone) stats.rm.done++; }
+        if (role === 'SM') { stats.sm.total++; if (isDone) stats.sm.done++; }
+        if (role === 'ASM') { stats.asm.total++; if (isDone) stats.asm.done++; }
       }
     });
 
     res.json({
       date,
+      topics: dailyTopics,
       stats: {
         totalUsers,
         totalSubmissions,
         participationRate,
-        roleStats
+        groupedStats
       },
-      sampleResponses: responses.slice(0, 500) // Send a sample for AI logic
+      sampleResponses: responses.slice(0, 800)
     });
   } catch (err: any) {
     console.error("Insights data fetch error:", err);
@@ -893,29 +935,60 @@ router.post("/admin/generate-insights-v2", async (req, res) => {
   if (!groqKey) return res.status(500).json({ error: "GROQ_API_KEY not configured" });
 
   try {
-   const prompt = `[INST] Analyze the "Daily Choreography" qualitative responses for ${date} and provide a strategic MD-level report.
+    const prompt = `Analyze the "Daily Choreography" field responses for ${date} and generate a Strategic Leadership Report for the Managing Director.
+Completion rate: ${data.stats?.participationRate?.toFixed(1)}%
+Total Submissions: ${data.stats?.totalSubmissions} / ${data.stats?.totalUsers}
 
-CONTEXT DATA:
-- Total Responses: ${data.sampleResponses?.length || 0}
-- Operational Progress: ${data.stats?.participationRate?.toFixed(1) || 0}% completion
-- Sample Data: ${JSON.stringify((data.sampleResponses || []).slice(0, 50).map((r: any) => ({ q: r.question, a: r.answer })))}
+DAILY TOPICS BY LEVEL:
+${JSON.stringify(data.topics || {})}
 
-REQUIREMENTS:
-1. Themes: Categorize feedback into 4-5 major "Themes".
-2. Percentages: Assign a numerical percentage to each theme.
-3. Red Flags: Identify critical blockers.
-4. Recommendations: 3-5 high-impact interventions.
-5. Sentiment Score: 0-100 score.
+HIERARCHY COMPLETION (RMs/SMs/ASMs completed per ZH/ZSM):
+${JSON.stringify(data.stats?.groupedStats || {})}
 
-Your response must be strictly valid JSON according to this structure:
+Sample responses for context: ${JSON.stringify(data.sampleResponses.slice(0, 80).map((r: any) => ({ q: r.question, a: r.answer })))}
+
+Respond ONLY with this exact JSON structure:
 {
-  "executive_summary": "...",
-  "themes": [{"name": "...", "percentage": 25, "insight": "..."}],
-  "red_flags": ["...", "..."],
-  "action_items": ["...", "..."],
-  "field_sentiment_score": 85
-}
-Do not include any text outside the JSON block. [/INST]`;
+  "executive_summary": "3-4 sentence high-level strategic narrative covering field morale, engagement, and operational readiness.",
+  "sentiment": {
+    "index": 75,
+    "commentary": "Brief analysis of emotional tone and engagement level."
+  },
+  "themes": [
+    {
+      "name": "Theme Title",
+      "percentage": 30,
+      "insight": "Deeper explanation of why this is recurring."
+    }
+  ],
+  "red_flags": [
+    {
+      "category": "Operational/Manpower/Process",
+      "issue": "Specific blocker description",
+      "severity": "High/Medium"
+    }
+  ],
+  "action_plan": {
+    "immediate": ["Step 1", "Step 2"],
+    "short_term": ["Step 1"],
+    "strategic": ["Long-term goal"]
+  },
+  "topic_intelligence": {
+    "rm_sm": "Analysis of coaching quality at RM-SM level based on topics",
+    "sm_asm": "Analysis of alignment at SM-ASM level",
+    "asm_zsh": "Analysis of strategic focus at senior level"
+  },
+  "response_intelligence": {
+    "trends": "Question-wise answer patterns and regional variances",
+    "unusual_patterns": "Anything anomalous in the data",
+    "field_updates_insight": "Specific insight into how the field is updating their daily choreography (quality, depth, honesty)"
+  },
+  "operational_health": {
+    "coaching_adoption": "Rating/Commentary",
+    "discipline": "Commentary",
+    "governance": "Commentary"
+  }
+}`;
 
     const result = await new Promise<any>((resolve, reject) => {
       const body = JSON.stringify({
@@ -963,56 +1036,9 @@ Do not include any text outside the JSON block. [/INST]`;
     res.json(JSON.parse(match[0]));
   } catch (err: any) {
     console.error("Groq insight error:", err.message);
-    res.status(500).json({ error: "Failed to generate insights", details: err.message.slice(0, 300) });
-  }
-});
-
-router.get("/test-hf", async (req, res) => {
-  try {
-    const hfToken = (process.env.HF_TOKEN || "").trim();
-    const hfModelId = (process.env.HF_MODEL_ID || "HuggingFaceH4/zephyr-7b-beta").trim();
-    
-    console.log(`[HF Test] URL: https://api-inference.huggingface.co/models/${hfModelId}`);
-
-    const data = await new Promise<any>((resolve, reject) => {
-      const payload = JSON.stringify({ inputs: "Hello" });
-      const options = {
-        hostname: "api-inference.huggingface.co",
-        path: `/models/${hfModelId}`,
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${hfToken}`,
-          "Content-Type": "application/json",
-          "Content-Length": Buffer.byteLength(payload)
-        },
-        timeout: 10000
-      };
-
-      const req = https.request(options, (innerRes) => {
-        let raw = "";
-        innerRes.on("data", chunk => raw += chunk);
-        innerRes.on("end", () => {
-          if (innerRes.statusCode && innerRes.statusCode >= 400) {
-            reject(new Error(`Status ${innerRes.statusCode}: ${raw}`));
-            return;
-          }
-          try { resolve(JSON.parse(raw)); } catch(e) { resolve(raw); }
-        });
-      });
-      req.on("error", reject);
-      req.write(payload);
-      req.end();
-    });
-
-    res.json({
-      success: true,
-      data
-    });
-  } catch (err: any) {
-    console.error("[HF Test Error]:", err.message);
-    res.status(500).json({
-      success: false,
-      error: err.message
+    res.status(500).json({ 
+      error: "Failed to generate insights", 
+      details: err.message.slice(0, 300) 
     });
   }
 });
