@@ -841,7 +841,7 @@ router.get("/admin/insights-data", async (req, res) => {
     const submissions = await fetchLargeTable('submissions', '*', (q: any) => q.eq('date', date));
     
     // 2. Fetch all users to calculate participation
-    const users = await fetchLargeTable('users', 'user_id, role, manager_id');
+    const users = await fetchLargeTable('users', 'user_id, role, manager_id, name');
     
     // 3. Fetch all responses for the date to provide qualitative context
     // We'll limit this to first 1000 responses to avoid payload overflow, but usually it's enough for AI to see trends
@@ -910,6 +910,24 @@ router.get("/admin/insights-data", async (req, res) => {
       }
     });
 
+    // 6. Identify Bottom Performers (0% completion)
+    const bottomPerformers: Record<string, string[]> = { ZSM: [], SM: [], ASM: [] };
+    const performersByZSM: Record<string, any> = groupedStats.zsm;
+    
+    Object.values(performersByZSM).forEach((zsm: any) => {
+      const rmRate = zsm.rm.total > 0 ? (zsm.rm.done / zsm.rm.total) * 100 : 100;
+      if (rmRate < 30) bottomPerformers.ZSM.push(zsm.name);
+    });
+
+    // Also look for individual SMs/ASMs with 0%
+    users.filter(u => ['SM', 'ASM'].includes(u.role?.toUpperCase())).forEach(u => {
+      const isDone = submissions.some(s => s.target_user === u.user_id);
+      if (!isDone) {
+        if (u.role.toUpperCase() === 'SM') bottomPerformers.SM.push(u.name);
+        if (u.role.toUpperCase() === 'ASM') bottomPerformers.ASM.push(u.name);
+      }
+    });
+
     res.json({
       date,
       topics: dailyTopics,
@@ -917,7 +935,12 @@ router.get("/admin/insights-data", async (req, res) => {
         totalUsers,
         totalSubmissions,
         participationRate,
-        groupedStats
+        groupedStats,
+        bottomPerformers: {
+          ZSM: bottomPerformers.ZSM.slice(0, 10),
+          SM: bottomPerformers.SM.slice(0, 15),
+          ASM: bottomPerformers.ASM.slice(0, 15)
+        }
       },
       sampleResponses: responses.slice(0, 800)
     });
@@ -945,6 +968,9 @@ ${JSON.stringify(data.topics || {})}
 HIERARCHY COMPLETION (RMs/SMs/ASMs completed per ZH/ZSM):
 ${JSON.stringify(data.stats?.groupedStats || {})}
 
+BOTTOM PERFORMERS (Users with 0% or critical low completion):
+${JSON.stringify(data.stats?.bottomPerformers || {})}
+
 Sample responses for context: ${JSON.stringify(data.sampleResponses.slice(0, 80).map((r: any) => ({ q: r.question, a: r.answer })))}
 
 Respond ONLY with this exact JSON structure:
@@ -953,6 +979,10 @@ Respond ONLY with this exact JSON structure:
   "sentiment": {
     "index": 75,
     "commentary": "Brief analysis of emotional tone and engagement level."
+  },
+  "bottom_performers_analysis": {
+    "commentary": "Strategic analysis of why these specific clusters/names are lagging.",
+    "top_red_flag_names": ["Name 1 (Role)", "Name 2 (Role)"]
   },
   "themes": [
     {
@@ -1040,6 +1070,80 @@ Respond ONLY with this exact JSON structure:
       error: "Failed to generate insights", 
       details: err.message.slice(0, 300) 
     });
+  }
+});
+
+// Export Choreography Uptick Report (CSV)
+router.get("/admin/export-uptick-report", async (req, res) => {
+  const { startDate, endDate } = req.query;
+  if (!startDate || !endDate) return res.status(400).json({ error: "Date range required" });
+
+  try {
+    const submissions = await fetchLargeTable('submissions', '*', (q: any) => 
+      q.gte('date', startDate).lte('date', endDate)
+    );
+    const users = await fetchLargeTable('users', 'user_id, name, role, manager_id');
+    const userMap = new Map();
+    users.forEach(u => userMap.set(u.user_id, u));
+
+    const findManagerWithRole = (userId: string, targetRole: string) => {
+      let current = userMap.get(userId);
+      let depth = 0;
+      while (current && depth < 10) {
+        if ((current.role || "").toUpperCase().includes(targetRole)) return current;
+        current = userMap.get(current.manager_id);
+        depth++;
+      }
+      return null;
+    };
+
+    // Calculate completion days per user
+    const userCompletionDays: Record<string, Set<string>> = {};
+    submissions.forEach(s => {
+      if (!userCompletionDays[s.target_user]) userCompletionDays[s.target_user] = new Set();
+      userCompletionDays[s.target_user].add(s.date);
+    });
+
+    const daysInRange = Math.max(1, (new Date(endDate as string).getTime() - new Date(startDate as string).getTime()) / (1000 * 60 * 60 * 24) + 1);
+
+    // Group by ZSM
+    const zsmReport: Record<string, any> = {};
+
+    users.forEach(u => {
+      const zsm = findManagerWithRole(u.user_id, 'ZSM');
+      if (!zsm) return;
+
+      if (!zsmReport[zsm.user_id]) {
+        zsmReport[zsm.user_id] = { 
+          zsmName: zsm.name,
+          RM: { total: 0, completions: 0 },
+          SM: { total: 0, completions: 0 },
+          ASM: { total: 0, completions: 0 }
+        };
+      }
+
+      const role = (u.role || "").toUpperCase();
+      const stats = zsmReport[zsm.user_id];
+      const completions = userCompletionDays[u.user_id]?.size || 0;
+
+      if (role === 'RM') { stats.RM.total++; stats.RM.completions += completions; }
+      if (role === 'SM') { stats.SM.total++; stats.SM.completions += completions; }
+      if (role === 'ASM') { stats.ASM.total++; stats.ASM.completions += completions; }
+    });
+
+    let csv = `ZSM Name,RM Adoption %,SM Adoption %,ASM Adoption %,Period: ${startDate} to ${endDate}\n`;
+    Object.values(zsmReport).forEach((r: any) => {
+      const rmPct = r.RM.total > 0 ? (r.RM.completions / (r.RM.total * daysInRange)) * 100 : 0;
+      const smPct = r.SM.total > 0 ? (r.SM.completions / (r.SM.total * daysInRange)) * 100 : 0;
+      const asmPct = r.ASM.total > 0 ? (r.ASM.completions / (r.ASM.total * daysInRange)) * 100 : 0;
+      csv += `"${r.zsmName}",${rmPct.toFixed(1)}%,${smPct.toFixed(1)}%,${asmPct.toFixed(1)}%\n`;
+    });
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename=ZSM_Uptick_Report_${startDate}_to_${endDate}.csv`);
+    res.send(csv);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
   }
 });
 
