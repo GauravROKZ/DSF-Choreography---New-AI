@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { User } from '@/types';
-import { Upload, Download, FileText, Users, Database, ShieldCheck, ArrowLeft, Calendar, Clock, Sparkles, FileDown } from 'lucide-react';
+import { Upload, Download, FileText, Users, Database, ShieldCheck, ArrowLeft, Calendar, Clock, Sparkles, FileDown, ChevronDown, ChevronUp } from 'lucide-react';
 import { motion } from 'motion/react';
 import Papa from 'papaparse';
 import { formatToday, getFormattedDateDDMMYY } from '@/lib/utils';
@@ -29,6 +29,21 @@ export default function AdminDashboard({ setToast, onBack }: AdminDashboardProps
   const [uptickStartDate, setUptickStartDate] = useState(formatToday());
   const [uptickEndDate, setUptickEndDate] = useState(formatToday());
   const [isExportingUptick, setIsExportingUptick] = useState(false);
+  const [isConfigExpanded, setIsConfigExpanded] = useState(false);
+
+  // Report Configuration Settings
+  const [redFlagThreshold, setRedFlagThreshold] = useState(50);
+  const [bottomPerformerThreshold, setBottomPerformerThreshold] = useState(30);
+  const [enabledSections, setEnabledSections] = useState({
+    executiveSummary: true,
+    sentimentIdx: true,
+    bottomPerformers: true,
+    hierarchyStats: true,
+    topicAlignment: true,
+    fieldThemes: true,
+    redFlags: true,
+    actionPlan: true
+  });
 
   useEffect(() => {
     fetchStats();
@@ -43,6 +58,18 @@ export default function AdminDashboard({ setToast, onBack }: AdminDashboardProps
         const data = await response.json();
         if (data.start_time) setStartTime(data.start_time);
         if (data.end_time) setEndTime(data.end_time);
+        if (data.red_flag_threshold) setRedFlagThreshold(Number(data.red_flag_threshold));
+        if (data.bottom_performer_threshold) setBottomPerformerThreshold(Number(data.bottom_performer_threshold));
+        if (data.enabled_sections) {
+          try {
+            const sections = typeof data.enabled_sections === 'string' 
+              ? JSON.parse(data.enabled_sections) 
+              : data.enabled_sections;
+            setEnabledSections(prev => ({ ...prev, ...sections }));
+          } catch (e) {
+            console.error("Failed to parse sections", e);
+          }
+        }
         if (data.last_hierarchy_sync) {
           const date = new Date(data.last_hierarchy_sync);
           setLastHierarchySync(date.toLocaleString('en-IN', { 
@@ -72,7 +99,10 @@ export default function AdminDashboard({ setToast, onBack }: AdminDashboardProps
         body: JSON.stringify({ 
           settings: {
             start_time: startTime,
-            end_time: endTime
+            end_time: endTime,
+            red_flag_threshold: redFlagThreshold,
+            bottom_performer_threshold: bottomPerformerThreshold,
+            enabled_sections: enabledSections
           }
         })
       });
@@ -329,347 +359,367 @@ export default function AdminDashboard({ setToast, onBack }: AdminDashboardProps
     doc.setFontSize(10);
     doc.text("PREPARED FOR: TATA AIA DSF CHANNEL", 30, pageHeight - 30);
 
-    // PAGE 2: EXECUTIVE SUMMARY & SENTIMENT
-    doc.addPage();
     let currentY = 25;
-    
-    // Title
-    doc.setFillColor(NAVY[0], NAVY[1], NAVY[2]);
-    doc.rect(15, currentY - 5, pageWidth - 30, 12, 'F');
-    doc.setTextColor(255, 255, 255);
-    doc.setFontSize(14);
-    doc.setFont("helvetica", "bold");
-    doc.text("EXECUTIVE OVERVIEW", 20, currentY + 3);
-    
-    currentY += 20;
 
-    // Daily Topics at Top
-    if (rawData.topics) {
-      doc.setTextColor(RED[0], RED[1], RED[2]);
-      doc.setFontSize(10);
-      doc.text("DAILY CHOREOGRAPHY TOPICS:", 15, currentY);
-      currentY += 6;
-      doc.setFontSize(9);
-      doc.setTextColor(NAVY[0], NAVY[1], NAVY[2]);
-      Object.entries(rawData.topics).forEach(([lvl, topic]: [string, any]) => {
-        doc.setFont("helvetica", "bold");
-        doc.text(`${lvl}:`, 15, currentY);
+    // PAGE 2: EXECUTIVE SUMMARY & SENTIMENT
+    if (enabledSections.executiveSummary || enabledSections.sentimentIdx || enabledSections.bottomPerformers) {
+      doc.addPage();
+      currentY = 25;
+      
+      // Title
+      doc.setFillColor(NAVY[0], NAVY[1], NAVY[2]);
+      doc.rect(15, currentY - 5, pageWidth - 30, 12, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(14);
+      doc.setFont("helvetica", "bold");
+      doc.text("EXECUTIVE OVERVIEW", 20, currentY + 3);
+      
+      currentY += 20;
+
+      // Daily Topics at Top
+      if (rawData.topics) {
+        doc.setTextColor(RED[0], RED[1], RED[2]);
+        doc.setFontSize(10);
+        doc.text("DAILY CHOREOGRAPHY TOPICS:", 15, currentY);
+        currentY += 6;
+        doc.setFontSize(9);
+        doc.setTextColor(NAVY[0], NAVY[1], NAVY[2]);
+        Object.entries(rawData.topics).forEach(([lvl, topic]: [string, any]) => {
+          doc.setFont("helvetica", "bold");
+          doc.text(`${lvl}:`, 15, currentY);
+          doc.setFont("helvetica", "normal");
+          doc.text(`${topic}`, 45, currentY);
+          currentY += 5;
+        });
+        currentY += 10;
+      }
+
+      // Narrative Summary
+      if (enabledSections.executiveSummary) {
+        doc.setTextColor(NAVY[0], NAVY[1], NAVY[2]);
+        doc.setFontSize(11);
         doc.setFont("helvetica", "normal");
-        doc.text(`${topic}`, 45, currentY);
-        currentY += 5;
-      });
-      currentY += 10;
-    }
+        const summaryLines = doc.splitTextToSize(report.executive_summary || "No summary available.", pageWidth - 30);
+        doc.text(summaryLines, 15, currentY);
+        currentY += (summaryLines.length * 6) + 15;
+      }
 
-    // Narrative Summary
-    doc.setTextColor(NAVY[0], NAVY[1], NAVY[2]);
-    doc.setFontSize(11);
-    doc.setFont("helvetica", "normal");
-    const summaryLines = doc.splitTextToSize(report.executive_summary || "No summary available.", pageWidth - 30);
-    doc.text(summaryLines, 15, currentY);
-    currentY += (summaryLines.length * 6) + 15;
+      // Sentiment Index Section
+      if (enabledSections.sentimentIdx) {
+        doc.setFillColor(241, 245, 249);
+        doc.roundedRect(15, currentY, pageWidth - 30, 35, 3, 3, 'F');
+        
+        doc.setTextColor(RED[0], RED[1], RED[2]);
+        doc.setFontSize(12);
+        doc.text("FIELD SENTIMENT INDEX", 25, currentY + 12);
+        
+        const sentimentScore = report.sentiment?.index || 0;
+        doc.setDrawColor(SLATE[0], SLATE[1], SLATE[2]);
+        doc.rect(25, currentY + 18, 100, 6, 'S');
+        doc.setFillColor(sentimentScore > 70 ? 34 : sentimentScore > 40 ? 245 : 220, sentimentScore > 70 ? 197 : sentimentScore > 40 ? 158 : 38, sentimentScore > 70 ? 94 : sentimentScore > 40 ? 11 : 38);
+        doc.rect(25, currentY + 18, sentimentScore, 6, 'F');
+        
+        doc.setFontSize(24);
+        doc.text(`${sentimentScore}`, 135, currentY + 18);
+        doc.setFontSize(10);
+        doc.text("/ 100", 153, currentY + 18);
+        
+        doc.setFontSize(9);
+        doc.setTextColor(SLATE[0], SLATE[1], SLATE[2]);
+        const sentimentComm = doc.splitTextToSize(report.sentiment?.commentary || "", pageWidth - 50);
+        doc.text(sentimentComm, 25, currentY + 28);
+        
+        currentY += 50;
+      }
+      
+      // Bottom Performers Analysis
+      if (enabledSections.bottomPerformers && report.bottom_performers_analysis) {
+        doc.setFillColor(254, 242, 242);
+        doc.roundedRect(15, currentY, pageWidth - 30, 35, 3, 3, 'F');
+        
+        doc.setTextColor(RED[0], RED[1], RED[2]);
+        doc.setFontSize(11);
+        doc.setFont("helvetica", "bold");
+        doc.text("LAGGING CLUSTERS & PROFILES", 25, currentY + 10);
+        
+        doc.setTextColor(NAVY[0], NAVY[1], NAVY[2]);
+        doc.setFontSize(9);
+        doc.setFont("helvetica", "normal");
+        const botComm = doc.splitTextToSize(report.bottom_performers_analysis.commentary || "", pageWidth - 50);
+        doc.text(botComm, 25, currentY + 16);
+        
+        doc.setFont("helvetica", "bold");
+        doc.text("Focus Profiles:", 25, currentY + 28);
+        doc.setFont("helvetica", "normal");
+        doc.text((report.bottom_performers_analysis.top_red_flag_names || []).join(", "), 55, currentY + 28);
+        
+        currentY += 50;
+      }
 
-    // Sentiment Index Section
-    doc.setFillColor(241, 245, 249);
-    doc.roundedRect(15, currentY, pageWidth - 30, 35, 3, 3, 'F');
-    
-    doc.setTextColor(RED[0], RED[1], RED[2]);
-    doc.setFontSize(12);
-    doc.text("FIELD SENTIMENT INDEX", 25, currentY + 12);
-    
-    const sentimentScore = report.sentiment?.index || 0;
-    doc.setDrawColor(SLATE[0], SLATE[1], SLATE[2]);
-    doc.rect(25, currentY + 18, 100, 6, 'S');
-    doc.setFillColor(sentimentScore > 70 ? 34 : sentimentScore > 40 ? 245 : 220, sentimentScore > 70 ? 197 : sentimentScore > 40 ? 158 : 38, sentimentScore > 70 ? 94 : sentimentScore > 40 ? 11 : 38);
-    doc.rect(25, currentY + 18, sentimentScore, 6, 'F');
-    
-    doc.setFontSize(24);
-    doc.text(`${sentimentScore}`, 135, currentY + 18);
-    doc.setFontSize(10);
-    doc.text("/ 100", 153, currentY + 18);
-    
-    doc.setFontSize(9);
-    doc.setTextColor(SLATE[0], SLATE[1], SLATE[2]);
-    const sentimentComm = doc.splitTextToSize(report.sentiment?.commentary || "", pageWidth - 50);
-    doc.text(sentimentComm, 25, currentY + 28);
-    
-    currentY += 50;
-    
-    // Bottom Performers Analysis
-    if (report.bottom_performers_analysis) {
-      doc.setFillColor(254, 242, 242);
-      doc.roundedRect(15, currentY, pageWidth - 30, 35, 3, 3, 'F');
-      
-      doc.setTextColor(RED[0], RED[1], RED[2]);
-      doc.setFontSize(11);
-      doc.setFont("helvetica", "bold");
-      doc.text("LAGGING CLUSTERS & PROFILES", 25, currentY + 10);
-      
+      // Operational Health Grid
       doc.setTextColor(NAVY[0], NAVY[1], NAVY[2]);
-      doc.setFontSize(9);
-      doc.setFont("helvetica", "normal");
-      const botComm = doc.splitTextToSize(report.bottom_performers_analysis.commentary || "", pageWidth - 50);
-      doc.text(botComm, 25, currentY + 16);
+      doc.setFontSize(12);
+      doc.text("OPERATIONAL HEALTH COMMENTARY", 15, currentY);
       
-      doc.setFont("helvetica", "bold");
-      doc.text("Focus Profiles:", 25, currentY + 28);
-      doc.setFont("helvetica", "normal");
-      doc.text((report.bottom_performers_analysis.top_red_flag_names || []).join(", "), 55, currentY + 28);
-      
-      currentY += 50;
+      const healthData = [
+        ["Coaching Adoption", report.operational_health?.coaching_adoption || "N/A"],
+        ["Field Discipline", report.operational_health?.discipline || "N/A"],
+        ["Governance Maturity", report.operational_health?.governance || "N/A"]
+      ];
+
+      autoTable(doc, {
+        startY: currentY + 5,
+        head: [['Metric', 'AI Strategic Assessment']],
+        body: healthData,
+        theme: 'striped',
+        headStyles: { fillColor: NAVY, textColor: [255, 255, 255], fontStyle: 'bold' },
+        styles: { fontSize: 9, cellPadding: 4 },
+        columnStyles: { 0: { fontStyle: 'bold', cellWidth: 50 } }
+      });
     }
-
-    // Operational Health Grid
-    doc.setTextColor(NAVY[0], NAVY[1], NAVY[2]);
-    doc.setFontSize(12);
-    doc.text("OPERATIONAL HEALTH COMMENTARY", 15, currentY);
-    
-    const healthData = [
-      ["Coaching Adoption", report.operational_health?.coaching_adoption || "N/A"],
-      ["Field Discipline", report.operational_health?.discipline || "N/A"],
-      ["Governance Maturity", report.operational_health?.governance || "N/A"]
-    ];
-
-    autoTable(doc, {
-      startY: currentY + 5,
-      head: [['Metric', 'AI Strategic Assessment']],
-      body: healthData,
-      theme: 'striped',
-      headStyles: { fillColor: NAVY, textColor: [255, 255, 255], fontStyle: 'bold' },
-      styles: { fontSize: 9, cellPadding: 4 },
-      columnStyles: { 0: { fontStyle: 'bold', cellWidth: 50 } }
-    });
 
     // PAGE 3: DETAILED HIERARCHY ANALYTICS
-    doc.addPage();
-    currentY = 25;
-    
-    doc.setFillColor(NAVY[0], NAVY[1], NAVY[2]);
-    doc.rect(15, currentY - 5, pageWidth - 30, 12, 'F');
-    doc.setTextColor(255, 255, 255);
-    doc.text("ZH / ZSM LEVEL COMPLETION BREAKDOWN", 20, currentY + 3);
-    
-    currentY += 15;
-    
-    // ZH Table
-    if (rawData.stats?.groupedStats?.zh) {
-      doc.setTextColor(RED[0], RED[1], RED[2]);
-      doc.setFontSize(11);
-      doc.text("ZONAL HEAD (ZH) COMPLETION METRICS", 15, currentY);
-      currentY += 5;
-
-      const zhTable = Object.values(rawData.stats.groupedStats.zh).map((zh: any) => [
-        zh.name,
-        `${zh.rm.done}/${zh.rm.total}`,
-        `${zh.sm.done}/${zh.sm.total}`,
-        `${zh.asm.done}/${zh.asm.total}`,
-        `${(zh.rm.total > 0 ? (zh.rm.done/zh.rm.total)*100 : 0).toFixed(0)}%`
-      ]);
-
-      autoTable(doc, {
-        startY: currentY,
-        head: [['ZH Name', 'RMs Done', 'SMs Done', 'ASMs Done', 'RM %']],
-        body: zhTable,
-        theme: 'grid',
-        headStyles: { fillColor: NAVY, fontStyle: 'bold' },
-        styles: { fontSize: 8 },
-        columnStyles: { 4: { fontStyle: 'bold', textColor: RED } }
-      });
+    if (enabledSections.hierarchyStats) {
+      doc.addPage();
+      currentY = 25;
       
-      currentY = (doc as any).lastAutoTable.finalY + 15;
-    }
-
-    // ZSM Table
-    if (rawData.stats?.groupedStats?.zsm) {
-      if (currentY > 230) { doc.addPage(); currentY = 25; }
-      doc.setTextColor(RED[0], RED[1], RED[2]);
-      doc.setFontSize(11);
-      doc.text("ZONAL SALES MANAGER (ZSM) COMPLETION METRICS", 15, currentY);
-      currentY += 5;
-
-      const zsmTable = Object.values(rawData.stats.groupedStats.zsm).map((zsm: any) => [
-        zsm.name,
-        `${zsm.rm.done}/${zsm.rm.total}`,
-        `${zsm.sm.done}/${zsm.sm.total}`,
-        `${zsm.asm.done}/${zsm.asm.total}`,
-        `${(zsm.rm.total > 0 ? (zsm.rm.done/zsm.rm.total)*100 : 0).toFixed(0)}%`
-      ]);
-
-      autoTable(doc, {
-        startY: currentY,
-        head: [['ZSM Name', 'RMs Done', 'SMs Done', 'ASMs Done', 'RM %']],
-        body: zsmTable,
-        theme: 'grid',
-        headStyles: { fillColor: GOLD, fontStyle: 'bold' },
-        styles: { fontSize: 8 },
-        columnStyles: { 4: { fontStyle: 'bold', textColor: RED } }
-      });
+      doc.setFillColor(NAVY[0], NAVY[1], NAVY[2]);
+      doc.rect(15, currentY - 5, pageWidth - 30, 12, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.text("ZH / ZSM LEVEL COMPLETION BREAKDOWN", 20, currentY + 3);
       
-      currentY = (doc as any).lastAutoTable.finalY + 15;
+      currentY += 15;
+      
+      // ZH Table
+      if (rawData.stats?.groupedStats?.zh) {
+        doc.setTextColor(RED[0], RED[1], RED[2]);
+        doc.setFontSize(11);
+        doc.text("ZONAL HEAD (ZH) COMPLETION METRICS", 15, currentY);
+        currentY += 5;
+
+        const zhTable = Object.values(rawData.stats.groupedStats.zh).map((zh: any) => [
+          zh.name,
+          `${zh.rm.done}/${zh.rm.total}`,
+          `${zh.sm.done}/${zh.sm.total}`,
+          `${zh.asm.done}/${zh.asm.total}`,
+          `${(zh.rm.total > 0 ? (zh.rm.done/zh.rm.total)*100 : 0).toFixed(0)}%`
+        ]);
+
+        autoTable(doc, {
+          startY: currentY,
+          head: [['ZH Name', 'RMs Done', 'SMs Done', 'ASMs Done', 'RM %']],
+          body: zhTable,
+          theme: 'grid',
+          headStyles: { fillColor: NAVY, fontStyle: 'bold' },
+          styles: { fontSize: 8 },
+          columnStyles: { 4: { fontStyle: 'bold', textColor: RED } }
+        });
+        
+        currentY = (doc as any).lastAutoTable.finalY + 15;
+      }
+
+      // ZSM Table
+      if (rawData.stats?.groupedStats?.zsm) {
+        if (currentY > 230) { doc.addPage(); currentY = 25; }
+        doc.setTextColor(RED[0], RED[1], RED[2]);
+        doc.setFontSize(11);
+        doc.text("ZONAL SALES MANAGER (ZSM) COMPLETION METRICS", 15, currentY);
+        currentY += 5;
+
+        const zsmTable = Object.values(rawData.stats.groupedStats.zsm).map((zsm: any) => [
+          zsm.name,
+          `${zsm.rm.done}/${zsm.rm.total}`,
+          `${zsm.sm.done}/${zsm.sm.total}`,
+          `${zsm.asm.done}/${zsm.asm.total}`,
+          `${(zsm.rm.total > 0 ? (zsm.rm.done/zsm.rm.total)*100 : 0).toFixed(0)}%`
+        ]);
+
+        autoTable(doc, {
+          startY: currentY,
+          head: [['ZSM Name', 'RMs Done', 'SMs Done', 'ASMs Done', 'RM %']],
+          body: zsmTable,
+          theme: 'grid',
+          headStyles: { fillColor: GOLD, fontStyle: 'bold' },
+          styles: { fontSize: 8 },
+          columnStyles: { 4: { fontStyle: 'bold', textColor: RED } }
+        });
+        
+        currentY = (doc as any).lastAutoTable.finalY + 15;
+      }
     }
 
     // TOPIC & RESPONSE INTELLIGENCE PAGE
-    doc.addPage();
-    currentY = 25;
-    
-    doc.setFillColor(NAVY[0], NAVY[1], NAVY[2]);
-    doc.rect(15, currentY - 5, pageWidth - 30, 12, 'F');
-    doc.setTextColor(255, 255, 255);
-    doc.text("FIELD RESPONSE QUALITY", 20, currentY + 3);
-    
-    currentY += 15;
-
-    // Field Updates Insight
-    doc.setFillColor(248, 250, 252);
-    doc.roundedRect(15, currentY, pageWidth - 30, 30, 2, 2, 'F');
-    doc.setTextColor(GOLD[0], GOLD[1], GOLD[2]);
-    doc.setFontSize(11);
-    doc.setFont("helvetica", "bold");
-    doc.text("FIELD UPDATE QUALITY ASSESSMENT", 20, currentY + 10);
-    doc.setTextColor(NAVY[0], NAVY[1], NAVY[2]);
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(9);
-    const fuInsight = doc.splitTextToSize(report.response_intelligence?.field_updates_insight || "Data synthesis in progress...", pageWidth - 40);
-    doc.text(fuInsight, 20, currentY + 18);
-    
-    currentY += 40;
-
-    // Topic Intelligence
-    doc.setTextColor(NAVY[0], NAVY[1], NAVY[2]);
-    doc.setFontSize(12);
-    doc.text("CHOREOGRAPHY & TOPIC ALIGNMENT", 15, currentY);
-    
-    const topicData = [
-      ["RM-SM Interaction", report.topic_intelligence?.rm_sm || "N/A"],
-      ["SM-ASM Interaction", report.topic_intelligence?.sm_asm || "N/A"],
-      ["ASM-ZSH Interaction", report.topic_intelligence?.asm_zsh || "N/A"]
-    ];
-
-    autoTable(doc, {
-      startY: currentY + 5,
-      body: topicData,
-      theme: 'grid',
-      styles: { fontSize: 9, cellPadding: 5 },
-      columnStyles: { 0: { fontStyle: 'bold', cellWidth: 40, fillColor: [241, 245, 249] } }
-    });
-
-    currentY = (doc as any).lastAutoTable.finalY + 15;
-
-    doc.setTextColor(NAVY[0], NAVY[1], NAVY[2]);
-    doc.setFontSize(12);
-    doc.text("AI TREND ANALYSIS", 15, currentY);
-    currentY += 8;
-    doc.setFontSize(9);
-    const trendsLines = doc.splitTextToSize(report.response_intelligence?.trends || "", pageWidth - 30);
-    doc.text(trendsLines, 15, currentY);
-    currentY += (trendsLines.length * 5) + 10;
-
-    doc.setFont("helvetica", "bold");
-    doc.text("ANOMALIES / UNUSUAL PATTERNS:", 15, currentY);
-    currentY += 6;
-    doc.setFont("helvetica", "normal");
-    const anomLines = doc.splitTextToSize(report.response_intelligence?.unusual_patterns || "No anomalies detected.", pageWidth - 30);
-    doc.text(anomLines, 15, currentY);
-
-    // PAGE 4: STRATEGIC THEME ANALYSIS
-    doc.addPage();
-    currentY = 25;
-    
-    doc.setFillColor(NAVY[0], NAVY[1], NAVY[2]);
-    doc.rect(15, currentY - 5, pageWidth - 30, 12, 'F');
-    doc.setTextColor(255, 255, 255);
-    doc.text("FIELD FEEDBACK THEME EXTRACTION", 20, currentY + 3);
-    
-    currentY += 15;
-
-    (report.themes || []).forEach((theme: any, idx: number) => {
-      if (currentY > 260) { doc.addPage(); currentY = 25; }
+    if (enabledSections.topicAlignment) {
+      doc.addPage();
+      currentY = 25;
       
-      doc.setTextColor(NAVY[0], NAVY[1], NAVY[2]);
+      doc.setFillColor(NAVY[0], NAVY[1], NAVY[2]);
+      doc.rect(15, currentY - 5, pageWidth - 30, 12, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.text("FIELD RESPONSE QUALITY", 20, currentY + 3);
+      
+      currentY += 15;
+
+      // Field Updates Insight
+      doc.setFillColor(248, 250, 252);
+      doc.roundedRect(15, currentY, pageWidth - 30, 30, 2, 2, 'F');
+      doc.setTextColor(GOLD[0], GOLD[1], GOLD[2]);
       doc.setFontSize(11);
       doc.setFont("helvetica", "bold");
-      doc.text(theme.name || "Theme", 15, currentY);
-      
-      // Theme bar
-      const barY = currentY + 2;
-      doc.setFillColor(241, 245, 249);
-      doc.rect(15, barY, 100, 4, 'F');
-      doc.setFillColor(idx % 2 === 0 ? RED[0] : GOLD[0], idx % 2 === 0 ? RED[1] : GOLD[1], idx % 2 === 0 ? RED[2] : GOLD[2]);
-      doc.rect(15, barY, theme.percentage || 0, 4, 'F');
-      
+      doc.text("FIELD UPDATE QUALITY ASSESSMENT", 20, currentY + 10);
+      doc.setTextColor(NAVY[0], NAVY[1], NAVY[2]);
       doc.setFont("helvetica", "normal");
-      doc.setFontSize(10);
-      doc.text(`${theme.percentage}% Occurrence`, 120, barY + 3.5);
-      
-      currentY += 10;
       doc.setFontSize(9);
-      doc.setTextColor(SLATE[0], SLATE[1], SLATE[2]);
-      const themeInsight = doc.splitTextToSize(theme.insight || "", pageWidth - 30);
-      doc.text(themeInsight, 15, currentY);
+      const fuInsight = doc.splitTextToSize(report.response_intelligence?.field_updates_insight || "Data synthesis in progress...", pageWidth - 40);
+      doc.text(fuInsight, 20, currentY + 18);
       
-      currentY += (themeInsight.length * 5) + 10;
-    });
+      currentY += 40;
 
-    // PAGE 5: RED FLAGS & ACTION PLAN
-    doc.addPage();
-    currentY = 25;
-    
-    doc.setFillColor(RED[0], RED[1], RED[2]);
-    doc.rect(15, currentY - 5, pageWidth - 30, 12, 'F');
-    doc.setTextColor(255, 255, 255);
-    doc.text("CRITICAL RED FLAGS & RISKS", 20, currentY + 3);
-    
-    currentY += 15;
-    
-    if (report.red_flags && Array.isArray(report.red_flags)) {
-      report.red_flags.forEach((flag: any) => {
-        doc.setFillColor(flag.severity === 'High' ? 254 : 255, flag.severity === 'High' ? 242 : 251, flag.severity === 'High' ? 242 : 235);
-        doc.roundedRect(15, currentY, pageWidth - 30, 15, 2, 2, 'F');
+      // Topic Intelligence
+      doc.setTextColor(NAVY[0], NAVY[1], NAVY[2]);
+      doc.setFontSize(12);
+      doc.text("CHOREOGRAPHY & TOPIC ALIGNMENT", 15, currentY);
+      
+      const topicData = [
+        ["RM-SM Interaction", report.topic_intelligence?.rm_sm || "N/A"],
+        ["SM-ASM Interaction", report.topic_intelligence?.sm_asm || "N/A"],
+        ["ASM-ZSH Interaction", report.topic_intelligence?.asm_zsh || "N/A"]
+      ];
+
+      autoTable(doc, {
+        startY: currentY + 5,
+        body: topicData,
+        theme: 'grid',
+        styles: { fontSize: 9, cellPadding: 5 },
+        columnStyles: { 0: { fontStyle: 'bold', cellWidth: 40, fillColor: [241, 245, 249] } }
+      });
+
+      currentY = (doc as any).lastAutoTable.finalY + 15;
+
+      doc.setTextColor(NAVY[0], NAVY[1], NAVY[2]);
+      doc.setFontSize(12);
+      doc.text("AI TREND ANALYSIS", 15, currentY);
+      currentY += 8;
+      doc.setFontSize(9);
+      const trendsLines = doc.splitTextToSize(report.response_intelligence?.trends || "", pageWidth - 30);
+      doc.text(trendsLines, 15, currentY);
+      currentY += (trendsLines.length * 5) + 10;
+
+      doc.setFont("helvetica", "bold");
+      doc.text("ANOMALIES / UNUSUAL PATTERNS:", 15, currentY);
+      currentY += 6;
+      doc.setFont("helvetica", "normal");
+      const anomLines = doc.splitTextToSize(report.response_intelligence?.unusual_patterns || "No anomalies detected.", pageWidth - 30);
+      doc.text(anomLines, 15, currentY);
+    }
+
+    // PAGE 4: STRATEGIC THEME ANALYSIS
+    if (enabledSections.fieldThemes) {
+      doc.addPage();
+      currentY = 25;
+      
+      doc.setFillColor(NAVY[0], NAVY[1], NAVY[2]);
+      doc.rect(15, currentY - 5, pageWidth - 30, 12, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.text("FIELD FEEDBACK THEME EXTRACTION", 20, currentY + 3);
+      
+      currentY += 15;
+
+      (report.themes || []).forEach((theme: any, idx: number) => {
+        if (currentY > 260) { doc.addPage(); currentY = 25; }
         
-        doc.setFontSize(10);
+        doc.setTextColor(NAVY[0], NAVY[1], NAVY[2]);
+        doc.setFontSize(11);
         doc.setFont("helvetica", "bold");
-        doc.setTextColor(flag.severity === 'High' ? RED[0] : 180, flag.severity === 'High' ? RED[1] : 83, flag.severity === 'High' ? RED[2] : 9);
-        doc.text(`[${flag.category || 'BLOCKER'}]`, 20, currentY + 6);
+        doc.text(theme.name || "Theme", 15, currentY);
+        
+        // Theme bar
+        const barY = currentY + 2;
+        doc.setFillColor(241, 245, 249);
+        doc.rect(15, barY, 100, 4, 'F');
+        doc.setFillColor(idx % 2 === 0 ? RED[0] : GOLD[0], idx % 2 === 0 ? RED[1] : GOLD[1], idx % 2 === 0 ? RED[2] : GOLD[2]);
+        doc.rect(15, barY, theme.percentage || 0, 4, 'F');
         
         doc.setFont("helvetica", "normal");
-        doc.setTextColor(NAVY[0], NAVY[1], NAVY[2]);
-        doc.text(flag.issue || "", 20, currentY + 11);
-        currentY += 20;
+        doc.setFontSize(10);
+        doc.text(`${theme.percentage}% Occurrence`, 120, barY + 3.5);
+        
+        currentY += 10;
+        doc.setFontSize(9);
+        doc.setTextColor(SLATE[0], SLATE[1], SLATE[2]);
+        const themeInsight = doc.splitTextToSize(theme.insight || "", pageWidth - 30);
+        doc.text(themeInsight, 15, currentY);
+        
+        currentY += (themeInsight.length * 5) + 10;
       });
     }
 
-    currentY += 10;
-    doc.setFillColor(NAVY[0], NAVY[1], NAVY[2]);
-    doc.rect(15, currentY - 5, pageWidth - 30, 12, 'F');
-    doc.setTextColor(255, 255, 255);
-    doc.setFont("helvetica", "bold");
-    doc.text("RECOMMENDED STRATEGIC ACTION PLAN", 20, currentY + 3);
-    
-    currentY += 15;
-
-    const actionCols = [
-      { t: "IMMEDIATE", data: report.action_plan?.immediate || [] },
-      { t: "SHORT-TERM", data: report.action_plan?.short_term || [] },
-      { t: "STRATEGIC", data: report.action_plan?.strategic || [] }
-    ];
-
-    actionCols.forEach(col => {
-      doc.setTextColor(RED[0], RED[1], RED[2]);
-      doc.setFontSize(10);
-      doc.setFont("helvetica", "bold");
-      doc.text(col.t, 15, currentY);
-      currentY += 6;
+    // PAGE 5: RED FLAGS & ACTION PLAN
+    if (enabledSections.redFlags || enabledSections.actionPlan) {
+      doc.addPage();
+      currentY = 25;
       
-      doc.setTextColor(NAVY[0], NAVY[1], NAVY[2]);
-      doc.setFont("helvetica", "normal");
-      doc.setFontSize(9);
-      col.data.forEach((item: string) => {
-        const lines = doc.splitTextToSize(`• ${item}`, pageWidth - 30);
-        doc.text(lines, 15, currentY);
-        currentY += (lines.length * 5);
-      });
-      currentY += 5;
-    });
+      if (enabledSections.redFlags) {
+        doc.setFillColor(RED[0], RED[1], RED[2]);
+        doc.rect(15, currentY - 5, pageWidth - 30, 12, 'F');
+        doc.setTextColor(255, 255, 255);
+        doc.text("CRITICAL RED FLAGS & RISKS", 20, currentY + 3);
+        
+        currentY += 15;
+        
+        if (report.red_flags && Array.isArray(report.red_flags)) {
+          report.red_flags.forEach((flag: any) => {
+            doc.setFillColor(flag.severity === 'High' ? 254 : 255, flag.severity === 'High' ? 242 : 251, flag.severity === 'High' ? 242 : 235);
+            doc.roundedRect(15, currentY, pageWidth - 30, 15, 2, 2, 'F');
+            
+            doc.setFontSize(10);
+            doc.setFont("helvetica", "bold");
+            doc.setTextColor(flag.severity === 'High' ? RED[0] : 180, flag.severity === 'High' ? RED[1] : 83, flag.severity === 'High' ? RED[2] : 9);
+            doc.text(`[${flag.category || 'BLOCKER'}]`, 20, currentY + 6);
+            
+            doc.setFont("helvetica", "normal");
+            doc.setTextColor(NAVY[0], NAVY[1], NAVY[2]);
+            doc.text(flag.issue || "", 20, currentY + 11);
+            currentY += 20;
+          });
+        }
+        currentY += 10;
+      }
+
+      if (enabledSections.actionPlan) {
+        doc.setFillColor(NAVY[0], NAVY[1], NAVY[2]);
+        doc.rect(15, currentY - 5, pageWidth - 30, 12, 'F');
+        doc.setTextColor(255, 255, 255);
+        doc.setFont("helvetica", "bold");
+        doc.text("RECOMMENDED STRATEGIC ACTION PLAN", 20, currentY + 3);
+        
+        currentY += 15;
+
+        const actionCols = [
+          { t: "IMMEDIATE", data: report.action_plan?.immediate || [] },
+          { t: "SHORT-TERM", data: report.action_plan?.short_term || [] },
+          { t: "STRATEGIC", data: report.action_plan?.strategic || [] }
+        ];
+
+        actionCols.forEach(col => {
+          doc.setTextColor(RED[0], RED[1], RED[2]);
+          doc.setFontSize(10);
+          doc.setFont("helvetica", "bold");
+          doc.text(col.t, 15, currentY);
+          currentY += 6;
+          
+          doc.setTextColor(NAVY[0], NAVY[1], NAVY[2]);
+          doc.setFont("helvetica", "normal");
+          doc.setFontSize(9);
+          col.data.forEach((item: string) => {
+            const lines = doc.splitTextToSize(`• ${item}`, pageWidth - 30);
+            doc.text(lines, 15, currentY);
+            currentY += (lines.length * 5);
+          });
+          currentY += 5;
+        });
+      }
+    }
 
     // FIELD INTELLIGENCE
     if (currentY > 180) { doc.addPage(); currentY = 25; } else { currentY += 10; }
@@ -735,9 +785,149 @@ export default function AdminDashboard({ setToast, onBack }: AdminDashboardProps
       <div className="grid gap-6">
         <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-premium">
           <div className="flex items-center gap-3 mb-6">
-            <Upload size={20} className="text-brand-blue" />
-            <h3 className="font-bold text-brand-navy">Synchronize Questionnaire</h3>
+            <Sparkles size={20} className="text-amber-500" />
+            <div className="flex-1 flex items-center justify-between">
+              <h3 className="font-bold text-brand-navy">AI MD Insight Report</h3>
+              <button 
+                onClick={() => setIsConfigExpanded(!isConfigExpanded)}
+                className="p-1 hover:bg-slate-50 rounded-md transition-colors text-slate-400 flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider"
+              >
+                {isConfigExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                {isConfigExpanded ? "Hide Config" : "Report Config"}
+              </button>
+            </div>
           </div>
+          
+          <div className="space-y-4">
+            {isConfigExpanded && (
+              <motion.div 
+                initial={{ height: 0, opacity: 0 }}
+                animate={{ height: 'auto', opacity: 1 }}
+                className="overflow-hidden border-b border-slate-100 pb-6 mb-4 space-y-6"
+              >
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Red Flag Threshold (%)</label>
+                    <input
+                      type="number"
+                      value={redFlagThreshold}
+                      onChange={(e) => setRedFlagThreshold(Number(e.target.value))}
+                      className="w-full px-4 py-2 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-brand-blue/20"
+                    />
+                    <p className="text-[9px] text-slate-400 italic">Mark as critical risk if completion below this</p>
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Bottom Performer (%)</label>
+                    <input
+                      type="number"
+                      value={bottomPerformerThreshold}
+                      onChange={(e) => setBottomPerformerThreshold(Number(e.target.value))}
+                      className="w-full px-4 py-2 border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-brand-blue/20"
+                    />
+                    <p className="text-[9px] text-slate-400 italic">Identify individuals if completion below this</p>
+                  </div>
+                </div>
+
+                <div className="space-y-3">
+                  <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Enabled Report Sections</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {Object.entries({
+                      executiveSummary: "Executive Summary",
+                      sentimentIdx: "Sentiment Index",
+                      bottomPerformers: "Bottom Performers",
+                      hierarchyStats: "Hierarchy Stats",
+                      topicAlignment: "Topic Alignment",
+                      fieldThemes: "Field Themes",
+                      redFlags: "Red Flags",
+                      actionPlan: "Action Plan"
+                    }).map(([key, label]) => (
+                      <label key={key} className="flex items-center gap-2 p-2 border border-slate-100 rounded-lg cursor-pointer hover:bg-slate-50 transition-colors">
+                        <input 
+                          type="checkbox"
+                          checked={enabledSections[key as keyof typeof enabledSections]}
+                          onChange={() => setEnabledSections(prev => ({ 
+                            ...prev, 
+                            [key]: !prev[key as keyof typeof enabledSections] 
+                          }))}
+                          className="w-3 h-3 accent-brand-blue"
+                        />
+                        <span className="text-[10px] font-bold text-slate-600">{label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+
+                <button
+                  onClick={handleUpdateSettings}
+                  disabled={isSavingSettings}
+                  className="w-full bg-brand-navy text-white font-bold py-3 rounded-lg flex items-center justify-center gap-2 transition-all active:scale-95"
+                >
+                  <ShieldCheck size={18} />
+                  {isSavingSettings ? 'Saving Configuration...' : 'Save Report Settings'}
+                </button>
+              </motion.div>
+            )}
+
+            <p className="text-xs text-slate-500 leading-relaxed italic">
+              Generate a high-level strategic PDF for the Managing Director. AI will analyze today's participation trends and qualitative responses.
+            </p>
+            <div className="flex gap-2">
+              <div className="relative flex-1">
+                <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
+                <input
+                  type="date"
+                  value={insightDate}
+                  onChange={(e) => setInsightDate(e.target.value)}
+                  className="w-full pl-10 pr-4 py-3 bg-white border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-amber-200"
+                />
+              </div>
+              <button
+                onClick={handleGenerateAIInsight}
+                disabled={isGeneratingInsight || !insightDate}
+                className="bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white font-bold px-6 rounded-lg text-sm flex items-center gap-2 transition-all active:scale-95 whitespace-nowrap"
+              >
+                {isGeneratingInsight ? (
+                  <>
+                    <Clock className="animate-spin" size={16} />
+                    Analyzing...
+                  </>
+                ) : (
+                  <>
+                    <FileDown size={16} />
+                    Generate PDF
+                  </>
+                )}
+              </button>
+            </div>
+            
+            <div className="flex items-center gap-2 mt-4 pt-4 border-t border-slate-100">
+              <div className="flex-1 flex gap-2">
+                <input 
+                  type="date"
+                  value={uptickStartDate}
+                  onChange={(e) => setUptickStartDate(e.target.value)}
+                  className="w-full px-2 py-2 bg-slate-50 border border-slate-100 rounded-lg text-[10px] outline-none"
+                />
+                <input 
+                  type="date"
+                  value={uptickEndDate}
+                  onChange={(e) => setUptickEndDate(e.target.value)}
+                  className="w-full px-2 py-2 bg-slate-50 border border-slate-100 rounded-lg text-[10px] outline-none"
+                />
+              </div>
+              <button
+                onClick={handleExportUptick}
+                disabled={isExportingUptick}
+                className="px-3 py-2 bg-emerald-600 text-white rounded-lg text-[10px] font-bold hover:bg-emerald-700 disabled:opacity-50 flex items-center gap-1"
+              >
+                {isExportingUptick ? <Clock className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3" />}
+                Uptick CSV
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-premium">
           
           <div className="space-y-4">
             <p className="text-xs text-slate-500 leading-relaxed">
@@ -916,71 +1106,6 @@ export default function AdminDashboard({ setToast, onBack }: AdminDashboardProps
           </div>
         </div>
 
-        <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-premium">
-          <div className="flex items-center gap-3 mb-6">
-            <Sparkles size={20} className="text-amber-500" />
-            <h3 className="font-bold text-brand-navy">AI MD Insight Report</h3>
-          </div>
-          
-          <div className="space-y-4">
-            <p className="text-xs text-slate-500 leading-relaxed italic">
-              Generate a high-level strategic PDF for the Managing Director. AI will analyze today's participation trends and qualitative responses.
-            </p>
-            <div className="flex gap-2">
-              <div className="relative flex-1">
-                <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-                <input
-                  type="date"
-                  value={insightDate}
-                  onChange={(e) => setInsightDate(e.target.value)}
-                  className="w-full pl-10 pr-4 py-3 bg-white border border-slate-200 rounded-lg text-sm outline-none focus:ring-2 focus:ring-amber-200"
-                />
-              </div>
-              <button
-                onClick={handleGenerateAIInsight}
-                disabled={isGeneratingInsight || !insightDate}
-                className="bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white font-bold px-6 rounded-lg text-sm flex items-center gap-2 transition-all active:scale-95 whitespace-nowrap"
-              >
-                {isGeneratingInsight ? (
-                  <>
-                    <Clock className="animate-spin" size={16} />
-                    Analyzing...
-                  </>
-                ) : (
-                  <>
-                    <FileDown size={16} />
-                    Generate PDF
-                  </>
-                )}
-              </button>
-            </div>
-            
-            <div className="flex items-center gap-2 mt-4 pt-4 border-t border-slate-100">
-              <div className="flex-1 flex gap-2">
-                <input 
-                  type="date"
-                  value={uptickStartDate}
-                  onChange={(e) => setUptickStartDate(e.target.value)}
-                  className="w-full px-2 py-2 bg-slate-50 border border-slate-100 rounded-lg text-[10px] outline-none"
-                />
-                <input 
-                  type="date"
-                  value={uptickEndDate}
-                  onChange={(e) => setUptickEndDate(e.target.value)}
-                  className="w-full px-2 py-2 bg-slate-50 border border-slate-100 rounded-lg text-[10px] outline-none"
-                />
-              </div>
-              <button
-                onClick={handleExportUptick}
-                disabled={isExportingUptick}
-                className="px-3 py-2 bg-emerald-600 text-white rounded-lg text-[10px] font-bold hover:bg-emerald-700 disabled:opacity-50 flex items-center gap-1"
-              >
-                {isExportingUptick ? <Clock className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3" />}
-                Uptick CSV
-              </button>
-            </div>
-          </div>
-        </div>
 
         <div className="bg-red-50 rounded-xl border border-red-100 p-6 shadow-sm">
           <div className="flex items-center gap-3 mb-6">
